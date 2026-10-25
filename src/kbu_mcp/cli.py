@@ -134,17 +134,6 @@ def cmd_search(args) -> None:
             print(("  s." + str(p["sayfa"]) + " " if p["sayfa"] else "  ") + p["metin"][:400].replace("\n", " ⏎ "))
 
 
-def cmd_snapshot(args) -> None:
-    from . import snapshot
-
-    if args.action == "export":
-        print(snapshot.export(args.file or config.DATA_DIR / snapshot.FILENAME))
-    elif args.action == "push":
-        print(snapshot.push())
-    else:
-        print("kuruldu" if snapshot.pull() else "KBU_SNAPSHOT_REPO veya KBU_SNAPSHOT_URL tanımlı değil")
-
-
 def cmd_serve(args) -> None:
     from .server import main
 
@@ -199,11 +188,6 @@ def main(argv=None) -> None:
     p.add_argument("--kind")
     p.add_argument("--limit", type=int, default=8)
     p.set_defaults(func=cmd_search)
-
-    p = sub.add_parser("snapshot", help="İndeks anlık görüntüsü: export | push (HF dataset) | pull")
-    p.add_argument("action", choices=["export", "push", "pull"])
-    p.add_argument("file", nargs="?")
-    p.set_defaults(func=cmd_snapshot)
 
     p = sub.add_parser("serve", help="MCP sunucusunu başlat (varsayılan stdio; --http ile uzak sunucu)")
     p.add_argument("--http", action="store_true")

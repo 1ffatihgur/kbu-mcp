@@ -404,6 +404,8 @@ async def fetch_page(
 def index_status() -> dict:
     """Yerel indeksin durumu: belge/dosya sayıları, son güncellemeler, arka planda güncelleme çalışıyor mu."""
     out = {"surum": __version__, **updater.status()}
+    if os.environ.get("KBU_REMOTE"):
+        out.pop("veri_klasoru", None)
     try:
         c = conn()
     except RuntimeError:

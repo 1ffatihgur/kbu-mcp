@@ -2,9 +2,9 @@
 
     kbu-mcp --http [--port 7860]
 
-Hugging Face Spaces gibi kalıcı diski olmayan ücretsiz platformlar için tasarlandı:
-açılışta indeksin son anlık görüntüsünü indirir (KBU_SNAPSHOT_REPO), saatlik/günlük güncellemeleri
-kendisi çalıştırır ve günlük güncellemeden sonra yeni anlık görüntüyü geri yükler (HF_TOKEN yazma yetkili ise).
+Kendi bilgisayarınızda çalışır; scripts/remote.ps1 bir Cloudflare Tunnel açarak onu internete
+`https://<rastgele>.trycloudflare.com/mcp` adresiyle yayınlar. Saatlik/günlük güncellemeleri kendisi de
+çalıştırabilir (KBU_AUTO_UPDATE=0 ile kapatılır; Görev Zamanlayıcı kullanılıyorsa gerekmez).
 """
 
 import html
@@ -17,13 +17,13 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from . import __version__, config, snapshot, updater
+from . import __version__, config, updater
 
 log = logging.getLogger("kbu.remote")
 
 RATE_LIMIT = int(os.environ.get("KBU_RATE_LIMIT_PER_MIN", "120"))   # IP başına dakikadaki MCP isteği
 SCHEDULER_INTERVAL = 600                                              # güncelleme ihtiyacı kontrol aralığı (sn)
-_state = {"snapshot": "bekleniyor", "started": time.time()}
+_state = {"started": time.time()}
 
 
 # ============================================================================ hız sınırı
@@ -65,29 +65,14 @@ def _run(args: list[str]) -> int:
     return subprocess.run([sys.executable, "-m", "kbu_mcp", *args], env=env).returncode
 
 
-def _bootstrap_and_schedule() -> None:
-    # 1) İndeks yoksa son anlık görüntüyü indir (dakikalar) — yoksa ilk tarama zamanlayıcıda başlar (1-2 saat)
-    if not config.DB_PATH.exists():
-        try:
-            _state["snapshot"] = "indiriliyor"
-            _state["snapshot"] = "kuruldu" if snapshot.pull() else "tanımlı değil (ilk tarama yapılacak)"
-        except Exception as e:
-            log.exception("anlık görüntü indirilemedi")
-            _state["snapshot"] = f"hata: {e!r}"[:200]
-    else:
-        _state["snapshot"] = "mevcut indeks kullanılıyor"
-    if not config.AUTO_UPDATE:
-        return
-    # 2) Zamanlayıcı: gerektiğinde saatlik / tam güncelleme; tam güncellemeden sonra anlık görüntüyü yükle
-    can_push = bool(os.environ.get("KBU_SNAPSHOT_REPO") and (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")))
-    while True:
+def _schedule() -> None:
+    """Gerektiğinde saatlik / tam güncellemeyi çalıştırır (indeks yoksa ilk tarama, 1-2 saat)."""
+    while config.AUTO_UPDATE:
         try:
             mode = updater.needed_mode()
             if mode and not updater.lock_active():
                 log.info("güncelleme başlıyor: %s", mode)
-                rc = _run(["update"] + (["--hot"] if mode == "hot" else []))
-                if mode == "full" and rc == 0 and can_push and os.environ.get("KBU_SNAPSHOT_PUSH", "1") != "0":
-                    _run(["snapshot", "push"])
+                _run(["update"] + (["--hot"] if mode == "hot" else []))
         except Exception:
             log.exception("zamanlayıcı hatası")
         time.sleep(SCHEDULER_INTERVAL)
@@ -133,7 +118,7 @@ Kaynak kod ve yerel kurulum: <a href="{repo}">{repo}</a></p>
 
 def _status_dict() -> dict:
     st = updater.status()
-    st["anlik_goruntu"] = _state["snapshot"]
+    st.pop("veri_klasoru", None)  # yerel dosya yolunu dışarıya gösterme
     st["calisma_suresi_dk"] = int((time.time() - _state["started"]) / 60)
     if config.DB_PATH.exists():
         try:
@@ -182,8 +167,9 @@ def build_app():
 def run(port: int) -> None:
     import uvicorn
 
+    os.environ["KBU_REMOTE"] = "1"  # araçlar yerel dosya yollarını dışarıya göstermesin
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    threading.Thread(target=_bootstrap_and_schedule, name="kbu-scheduler", daemon=True).start()
+    threading.Thread(target=_schedule, name="kbu-scheduler", daemon=True).start()
     uvicorn.run(build_app(), host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*",
                 log_level="info")

@@ -1,6 +1,0 @@
-{$DOMAIN} {
-	encode gzip
-	reverse_proxy kbu:7860 {
-		flush_interval -1
-	}
-}

@@ -147,6 +147,39 @@ Linux `~/.local/share/kbu-mcp` (`KBU_DATA_DIR` ile değiştirilebilir).
 
 ---
 
+## 🌐 Uzak Erişim: Kurulum Gerektirmeden Paylaşın (Remote MCP)
+
+Sunucuyu kendi bilgisayarınızda çalıştırıp **ücretsiz Cloudflare Tunnel** ile internete açabilirsiniz.
+Böylece arkadaşlarınız ya da diğer cihazlarınız hiçbir şey kurmadan, sadece bir adres ekleyerek kullanır.
+Hesap, kredi kartı ya da alan adı gerekmez.
+
+1. Bir kez: `cloudflared` kurun:
+
+    ```bash
+    winget install Cloudflare.cloudflared
+    ```
+
+2. Depo klasöründe başlatın (indeks yoksa önce `kbu update`):
+
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\remote.ps1
+    ```
+
+3. Ekranda çıkan `https://<rastgele>.trycloudflare.com/mcp` adresini kullanın:
+    * **Claude Desktop / claude.ai:** **Settings → Connectors → Add custom connector** → Name: `KBÜ MCP`, URL: adres
+    * **Claude Code:** `claude mcp add --transport http karabuk-universitesi <adres>`
+    * **Codex:** `codex mcp add karabuk-universitesi --url <adres>`
+
+Bilmeniz gerekenler:
+* Adres **her başlatmada değişir** ve yalnızca bilgisayarınız açıkken ve betik çalışırken erişilebilir.
+* Sunucu yalnızca okuma yapan MCP araçlarını sunar (yerel dosyalarınıza erişim yoktur); IP başına
+  dakikada 120 istek sınırı ve canlı sorgular için 10 dakikalık önbellek vardır.
+* Durdurmak için betiğin penceresinde **Ctrl+C**.
+
+Kendi sunucunuzda çalıştırmak isterseniz: `kbu-mcp --http --port 7860` (önüne HTTPS sağlayan bir ters vekil koyun).
+
+---
+
 ## 💬 Örnek Sorular
 
 * "Bilgisayar mühendisliği bölüm sekreterinin telefon numarası nedir?"
@@ -220,6 +253,7 @@ Aynı anda yalnızca bir güncelleme çalışır; sunucunun ve zamanlanmış gö
 | `kbu ocr` | Taranmış PDF'leri OCR ile işle |
 | `kbu reindex` | Arama indeksini yeniden kur (siteyi yeniden taramadan) |
 | `kbu-mcp` | MCP sunucusunu stdio üzerinden başlat |
+| `kbu-mcp --http [--port 7860]` | Uzak (Streamable HTTP) sunucu: `/mcp`, `/`, `/health` |
 
 ### ⚙️ Ortam Değişkenleri
 
@@ -228,6 +262,8 @@ Aynı anda yalnızca bir güncelleme çalışır; sunucunun ve zamanlanmış gö
 | `KBU_DATA_DIR` | işletim sistemine göre (yukarıda) | İndeks, log ve OCR modellerinin klasörü |
 | `KBU_DB_PATH` | `KBU_DATA_DIR/kbu.db` | Veritabanı dosyası |
 | `KBU_AUTO_UPDATE` | `1` | `0`: sunucu açılışında otomatik güncelleme yapma |
+| `KBU_RATE_LIMIT_PER_MIN` | `120` | Uzak modda IP başına dakikadaki istek sınırı |
+| `KBU_LIVE_CACHE_SECONDS` | `600` | Canlı sorgu önbellek süresi (0: kapalı) |
 | `TESSDATA_PREFIX` | — | Kendi Tesseract dil verisi klasörünüz |
 
 ---

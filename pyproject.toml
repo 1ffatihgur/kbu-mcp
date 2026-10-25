@@ -29,7 +29,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-remote = ["huggingface_hub>=0.25", "uvicorn>=0.30"]
 dev = ["pytest>=8"]
 
 [project.urls]
