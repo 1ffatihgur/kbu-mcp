@@ -34,8 +34,10 @@ if [ -f "$HOME/kbu.db.gz" ] && ! sudo docker volume inspect kbu-mcp_kbu-data >/d
     sh -c 'gunzip -c /s.gz > /data/kbu.db && chown -R 1000:1000 /data'
 fi
 
-echo "==> Kapsayıcılar derlenip başlatılıyor (ilk derleme birkaç dakika sürer)"
-sudo docker compose up -d --build
+echo "==> İmaj GitHub'dan derleniyor (ilk derleme birkaç dakika sürer)"
+sudo docker build -t "kbu-mcp:$KBU_VERSION" "https://github.com/1ffatihgur/kbu-mcp.git#$KBU_VERSION"
+echo "==> Kapsayıcılar başlatılıyor"
+sudo docker compose up -d
 
 echo "==> Sunucu bekleniyor"
 for i in $(seq 1 60); do

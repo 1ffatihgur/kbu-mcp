@@ -4,8 +4,8 @@ name: kbu-mcp
 
 services:
   kbu:
-    build:
-      context: https://github.com/1ffatihgur/kbu-mcp.git#${KBU_VERSION:-main}
+    # setup.sh imajı GitHub'dan derler: docker build -t kbu-mcp:<sürüm> https://github.com/1ffatihgur/kbu-mcp.git#<sürüm>
+    image: kbu-mcp:${KBU_VERSION:-main}
     restart: unless-stopped
     environment:
       KBU_TRANSPORT: http
