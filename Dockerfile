@@ -19,6 +19,8 @@ ENV HOME=/home/user \
     PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8
 
+# Veri klasörü imajda kullanıcıya ait olsun: Docker adlandırılmış volume'u bu izinlerle oluşturur
+RUN mkdir -p /home/user/data
 WORKDIR /home/user/app
 COPY --chown=user pyproject.toml README.md LICENSE ./
 COPY --chown=user src ./src

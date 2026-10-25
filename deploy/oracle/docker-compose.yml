@@ -1,0 +1,35 @@
+# KBÜ MCP: kendi sunucunuzda (ör. Oracle Cloud Always Free) uzak MCP + otomatik HTTPS
+#   DOMAIN=ornek.alanadi.com docker compose up -d --build
+name: kbu-mcp
+
+services:
+  kbu:
+    build:
+      context: https://github.com/1ffatihgur/kbu-mcp.git#${KBU_VERSION:-main}
+    restart: unless-stopped
+    environment:
+      KBU_TRANSPORT: http
+      PORT: "7860"
+    volumes:
+      - kbu-data:/home/user/data     # indeks kalıcı diskte; güncellemeler kapsayıcının içinde döner
+    expose:
+      - "7860"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [kbu]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN tanımlı olmalı}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data             # Let's Encrypt sertifikaları
+      - caddy-config:/config
+
+volumes:
+  kbu-data:
+  caddy-data:
+  caddy-config:
