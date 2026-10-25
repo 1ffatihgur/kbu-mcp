@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+data/
+*.log
+# Kişiye özel yollar içerir; README'deki örneklerden kendi yapılandırmanızı oluşturun
+.mcp.json
+# Uçtan uca test çıktıları gerçek rehber kayıtlarını içerir
+eval/e2e_out.md
