@@ -1,5 +1,22 @@
 # Sürüm Notları
 
+## v1.1.0 (2026-10-25)
+
+### Yeni: Uzak (Remote) MCP
+- `kbu-mcp --http`: Streamable HTTP aktarımı (oturumsuz, JSON yanıt); kurulum gerektirmeden
+  Claude Desktop / claude.ai "Custom connector", Claude Code (`--transport http`) ve Codex (`--url`) ile kullanım.
+- Açılış sayfası (`/`) bağlantı yönergeleriyle, sağlık kontrolü (`/health`).
+- IP başına hız sınırı (`KBU_RATE_LIMIT_PER_MIN`, varsayılan 120/dk).
+- Sunucu içi zamanlayıcı: saatlik ve günlük güncellemeler kapsayıcının içinde çalışır.
+- **İndeks anlık görüntüsü:** `kbu snapshot export | push | pull`. Kalıcı diski olmayan ücretsiz
+  platformlarda (Hugging Face Spaces) sunucu açılırken son anlık görüntüyü özel bir HF dataset'ten indirir
+  (2,3 GB → ~480 MB), günlük güncellemeden sonra yenisini yükler.
+- `Dockerfile` (Tesseract + Türkçe model dahil) ve `deploy/huggingface/` Space dosyaları.
+
+### İyileştirmeler
+- Canlı araçlara kısa süreli önbellek (`KBU_LIVE_CACHE_SECONDS`, varsayılan 600 sn); aynı anda gelen
+  aynı istekler tek isteğe indirilir: üniversite sitesine yük binmez.
+
 ## v1.0.0 (2026-10-25)
 
 İlk kararlı sürüm.

@@ -1,0 +1,11 @@
+.venv
+.git
+data
+eval
+tests
+docs
+scripts
+deploy
+**/__pycache__
+*.egg-info
+.mcp.json

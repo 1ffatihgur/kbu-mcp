@@ -7,6 +7,7 @@ siteden doğrulanır.
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -417,7 +418,20 @@ def index_status() -> dict:
     return out
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="kbu-mcp", description="Karabük Üniversitesi MCP sunucusu")
+    ap.add_argument("--http", action="store_true", help="Uzak sunucu (Streamable HTTP) olarak çalış")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "7860")))
+    ap.add_argument("--version", action="version", version=f"kbu-mcp {__version__}")
+    args = ap.parse_args(argv)
+    if args.http or os.environ.get("KBU_TRANSPORT") == "http":
+        from .remote import run
+
+        run(args.port)
+        return
+
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:

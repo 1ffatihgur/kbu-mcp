@@ -1,6 +1,6 @@
 [project]
 name = "kbu-mcp"
-version = "1.0.0"
+version = "1.1.0"
 description = "Karabük Üniversitesi web sitesi (*.karabuk.edu.tr) için MCP sunucusu: sayfalar, PDF/Office belgeleri, telefon rehberi, AKTS, yemek listesi, akademik takvim"
 readme = "README.md"
 license = "MIT"
@@ -29,6 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+remote = ["huggingface_hub>=0.25", "uvicorn>=0.30"]
 dev = ["pytest>=8"]
 
 [project.urls]

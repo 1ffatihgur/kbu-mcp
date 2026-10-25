@@ -1,7 +1,11 @@
 """Canlı (sorgu anında) veri kaynakları: telefon rehberi, sayfa okuma, duyurular, menü, takvim."""
 
 import asyncio
+import copy
+import functools
+import os
 import re
+import time
 from difflib import SequenceMatcher
 from urllib.parse import urlsplit
 
@@ -14,6 +18,48 @@ from .extract import clean_text, extract_bytes, extract_html, sniff_kind
 from .textnorm import fold, normalize_for_index
 
 REHBER_URL = "https://rehber.karabuk.edu.tr/"
+
+# ======================================================================== kısa süreli önbellek
+# Uzak (çok kullanıcılı) sunucuda aynı sorunun üniversite sitesine tekrar tekrar gitmesini önler.
+# Süre kısa tutulur; içerik "canlı" olma özelliğini korur.
+
+CACHE_TTL = float(os.environ.get("KBU_LIVE_CACHE_SECONDS", "600"))
+_CACHE_MAX = 1000
+_cache: dict[tuple, tuple[float, object]] = {}
+_inflight: dict[tuple, asyncio.Future] = {}
+
+
+def ttl_cached(name: str, key=None):
+    """Async fonksiyonun sonucunu CACHE_TTL saniye saklar; aynı anda gelen aynı istekleri tek isteğe indirir."""
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            if CACHE_TTL <= 0:
+                return await fn(*args, **kwargs)
+            k = (name,) + (key(*args, **kwargs) if key else (args, tuple(sorted(kwargs.items()))))
+            hit = _cache.get(k)
+            if hit and time.monotonic() - hit[0] < CACHE_TTL:
+                return copy.deepcopy(hit[1])  # çağıran sonucu değiştirebilir (ör. filtreleme)
+            if k in _inflight:
+                return copy.deepcopy(await asyncio.shield(_inflight[k]))
+            fut = asyncio.get_running_loop().create_future()
+            _inflight[k] = fut
+            try:
+                res = await fn(*args, **kwargs)
+                if len(_cache) >= _CACHE_MAX:
+                    for old in sorted(_cache, key=lambda x: _cache[x][0])[: _CACHE_MAX // 5]:
+                        _cache.pop(old, None)
+                _cache[k] = (time.monotonic(), res)
+                fut.set_result(res)
+                return copy.deepcopy(res)
+            except BaseException as e:
+                fut.set_exception(e)
+                fut.exception()  # bekleyen yoksa "hiç alınmadı" uyarısını sustur
+                raise
+            finally:
+                _inflight.pop(k, None)
+        return wrapper
+    return deco
 
 
 def client() -> httpx.AsyncClient:
@@ -29,6 +75,7 @@ class NotAllowed(ValueError):
     pass
 
 
+@ttl_cached("fetch", key=lambda url, c=None: (urls.normalize(url) or url,))
 async def fetch_and_extract(url: str, c: httpx.AsyncClient | None = None):
     """URL'yi canlı çekip (Extracted, son_url, http_durum, içerik_türü, last_modified) döner."""
     n = urls.normalize(url)
@@ -110,6 +157,7 @@ def _best_option(options: list[tuple[str, str]], wanted: str | None) -> tuple[st
     return best if best_score >= 0.6 else None
 
 
+@ttl_cached("rehber_options")
 async def rehber_options() -> dict:
     async with client() as c:
         r = await c.get(REHBER_URL)
@@ -120,6 +168,7 @@ async def rehber_options() -> dict:
         }
 
 
+@ttl_cached("rehber")
 async def rehber_search(ad: str = "", soyad: str = "", birim: str = "", unvan: str = "", personel_tipi: str = "",
                         dahili: str = "", max_pages: int = 60) -> dict:
     """Telefon rehberini canlı sorgular. Birim/unvan adları en yakın seçeneğe eşlenir."""
@@ -174,6 +223,7 @@ async def rehber_search(ad: str = "", soyad: str = "", birim: str = "", unvan: s
 
 # ======================================================================== duyurular / haberler
 
+@ttl_cached("duyuru")
 async def site_announcements(site_url: str, limit: int = 20) -> dict:
     """Bir birim sitesinin ana sayfasındaki duyuru ve etkinlik bloklarını okur."""
     n = urls.normalize(site_url if "://" in site_url else f"https://{site_url}")
@@ -228,6 +278,7 @@ async def site_announcements(site_url: str, limit: int = 20) -> dict:
 
 # ======================================================================== bağlantı bulucu
 
+@ttl_cached("links")
 async def find_links(page_url: str, pattern: str) -> list[tuple[str, str]]:
     async with client() as c:
         r = await c.get(page_url)
