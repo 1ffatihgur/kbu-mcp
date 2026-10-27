@@ -134,6 +134,22 @@ def cmd_search(args) -> None:
             print(("  s." + str(p["sayfa"]) + " " if p["sayfa"] else "  ") + p["metin"][:400].replace("\n", " ⏎ "))
 
 
+def cmd_queries(args) -> None:
+    """Uzak sunucuya gelen araç çağrılarını okunur biçimde listeler."""
+    path = config.DATA_DIR / "queries.jsonl"
+    if not path.exists():
+        print("Henüz kayıtlı sorgu yok (uzak sunucu --http ile çalışırken araç çağrıları kaydedilir).")
+        return
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if args.ip:
+        rows = [r for r in rows if r.get("ip") == args.ip]
+    for r in rows[-args.last:]:
+        p = r.get("parametreler") or {}
+        detail = p.get("query") or p.get("url") or ", ".join(f"{k}={v}" for k, v in p.items() if v) or "-"
+        print(f"{r['zaman']}  {r.get('ip', '?'):<15}  {r.get('arac', '?'):<20}  {detail}")
+    print(f"\n{len(rows)} kayıt · dosya: {path}")
+
+
 def cmd_serve(args) -> None:
     from .server import main
 
@@ -188,6 +204,11 @@ def main(argv=None) -> None:
     p.add_argument("--kind")
     p.add_argument("--limit", type=int, default=8)
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("queries", help="Uzak sunucuya gelen araç çağrıları (sorgu logu)")
+    p.add_argument("--last", type=int, default=50, help="Son kaç kayıt (varsayılan 50)")
+    p.add_argument("--ip", help="Sadece bu IP adresinden gelenler")
+    p.set_defaults(func=cmd_queries)
 
     p = sub.add_parser("serve", help="MCP sunucusunu başlat (varsayılan stdio; --http ile uzak sunucu)")
     p.add_argument("--http", action="store_true")

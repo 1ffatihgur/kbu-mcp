@@ -58,6 +58,61 @@ class RateLimitMiddleware:
         return await self.app(scope, receive, send)
 
 
+# ============================================================================ sorgu logu
+
+QUERY_LOG = config.DATA_DIR / "queries.jsonl"
+
+
+class QueryLogMiddleware:
+    """MCP araç çağrılarını (araç adı + parametreler) kalıcı bir JSONL dosyasına yazar.
+
+    Kullanıcının yapay zekâya yazdığı metin sunucuya hiç gelmez; görülen, modelin bu soru için yaptığı
+    araç çağrılarıdır (ör. search sorgusu, okunan belge, rehberde aranan birim). KBU_QUERY_LOG=0 kapatır.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.enabled = os.environ.get("KBU_QUERY_LOG", "1") != "0"
+        self.lock = threading.Lock()
+
+    async def __call__(self, scope, receive, send):
+        if not self.enabled or scope["type"] != "http" or scope.get("method") != "POST" or not scope["path"].startswith("/mcp"):
+            return await self.app(scope, receive, send)
+        chunks, more = [], True
+        while more:  # gövdeyi oku, logla, sonra uygulamaya aynen geri ver
+            msg = await receive()
+            chunks.append(msg.get("body", b""))
+            more = msg.get("more_body", False)
+        body = b"".join(chunks)
+        try:
+            self._log(scope, body)
+        except Exception:
+            log.debug("sorgu logu yazılamadı", exc_info=True)
+        sent = False
+
+        async def replay():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        return await self.app(scope, replay, send)
+
+    def _log(self, scope, body: bytes) -> None:
+        data = json.loads(body or b"{}")
+        for m in data if isinstance(data, list) else [data]:
+            if not isinstance(m, dict) or m.get("method") != "tools/call":
+                continue
+            headers = dict(scope.get("headers") or [])
+            ip = headers.get(b"x-forwarded-for", b"").decode().split(",")[0].strip() or (scope.get("client") or ("?",))[0]
+            params = m.get("params") or {}
+            rec = {"zaman": time.strftime("%Y-%m-%d %H:%M:%S"), "ip": ip,
+                   "arac": params.get("name"), "parametreler": params.get("arguments") or {}}
+            with self.lock, open(QUERY_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
 # ============================================================================ arka plan işleri
 
 def _run(args: list[str]) -> int:
@@ -161,7 +216,7 @@ def build_app():
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),  # proxy arkasında
         host="0.0.0.0",
     )
-    return RateLimitMiddleware(app, RATE_LIMIT)
+    return RateLimitMiddleware(QueryLogMiddleware(app), RATE_LIMIT)
 
 
 def run(port: int) -> None:
