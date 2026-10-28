@@ -58,6 +58,37 @@ class RateLimitMiddleware:
         return await self.app(scope, receive, send)
 
 
+# ============================================================================ kimlik doğrulama
+
+class AuthMiddleware:
+    """KBU_API_KEYS tanımlıysa /mcp istekleri anahtar ister.
+
+    Anahtar şu yollardan biriyle gönderilir: `Authorization: Bearer <anahtar>`, `X-API-Key: <anahtar>`
+    veya başlık eklenemeyen istemciler (claude.ai özel bağlayıcı) için adres sonunda `?key=<anahtar>`.
+    """
+
+    def __init__(self, app, keys: set[str]):
+        self.app = app
+        self.keys = keys
+
+    async def __call__(self, scope, receive, send):
+        if not self.keys or scope["type"] != "http" or not scope["path"].startswith("/mcp"):
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        auth = headers.get(b"authorization", b"").decode()
+        key = auth[7:].strip() if auth.lower().startswith("bearer ") else headers.get(b"x-api-key", b"").decode().strip()
+        if not key:
+            from urllib.parse import parse_qs
+            key = (parse_qs(scope.get("query_string", b"").decode()).get("key") or [""])[0]
+        if key in self.keys:
+            return await self.app(scope, receive, send)
+        body = json.dumps({"hata": "Yetkisiz: geçerli bir API anahtarı gerekli (Authorization: Bearer <anahtar> veya ?key=)."},
+                          ensure_ascii=False).encode()
+        await send({"type": "http.response.start", "status": 401,
+                    "headers": [(b"content-type", b"application/json; charset=utf-8"), (b"www-authenticate", b"Bearer")]})
+        await send({"type": "http.response.body", "body": body})
+
+
 # ============================================================================ sorgu logu
 
 QUERY_LOG = config.DATA_DIR / "queries.jsonl"
@@ -159,10 +190,11 @@ code{{padding:2px 6px}} pre{{padding:12px;overflow-x:auto;white-space:pre-wrap;w
 <li><b>Add</b> — hemen kullanmaya başlayın.</li></ol>
 
 <h2>Claude Code</h2>
-<pre>claude mcp add --scope user --transport http karabuk-universitesi {mcp_url}</pre>
+<pre>claude mcp add --scope user --transport http karabuk-universitesi {mcp_url} --header "Authorization: Bearer ANAHTAR"</pre>
 
 <h2>Codex</h2>
-<pre>codex mcp add karabuk-universitesi --url {mcp_url}</pre>
+<pre>codex mcp add karabuk-universitesi --url {mcp_url} --bearer-token-env-var KBU_API_KEY</pre>
+<p class="mut">Erişim anahtarı sunucu yöneticisinden alınır. Başlık eklenemeyen istemcilerde adres: <code>{mcp_url}?key=ANAHTAR</code></p>
 
 <h2>Durum</h2>
 <div class="card">{status}</div>
@@ -175,14 +207,13 @@ def _status_dict() -> dict:
     st = updater.status()
     st.pop("veri_klasoru", None)  # yerel dosya yolunu dışarıya gösterme
     st["calisma_suresi_dk"] = int((time.time() - _state["started"]) / 60)
-    if config.DB_PATH.exists():
-        try:
-            from . import db
-            c = db.connect(readonly=True)
-            st["belge_sayisi"] = c.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0]
-            c.close()
-        except Exception:
-            pass
+    try:
+        from . import db
+        c = db.connect(readonly=True)
+        st["belge_sayisi"] = c.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0]
+        c.close()
+    except Exception:
+        pass
     return st
 
 
@@ -216,7 +247,7 @@ def build_app():
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),  # proxy arkasında
         host="0.0.0.0",
     )
-    return RateLimitMiddleware(QueryLogMiddleware(app), RATE_LIMIT)
+    return RateLimitMiddleware(AuthMiddleware(QueryLogMiddleware(app), config.API_KEYS), RATE_LIMIT)
 
 
 def run(port: int) -> None:
@@ -225,6 +256,8 @@ def run(port: int) -> None:
     os.environ["KBU_REMOTE"] = "1"  # araçlar yerel dosya yollarını dışarıya göstermesin
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if not config.API_KEYS:
+        log.warning("KBU_API_KEYS tanımlı değil: uzak MCP kimlik doğrulamasız açık")
     threading.Thread(target=_schedule, name="kbu-scheduler", daemon=True).start()
     uvicorn.run(build_app(), host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*",
                 log_level="info")

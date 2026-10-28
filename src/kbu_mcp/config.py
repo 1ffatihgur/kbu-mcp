@@ -21,8 +21,45 @@ def _default_data_dir() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "kbu-mcp"
 
 
+def _load_dotenv() -> None:
+    """Depo kökündeki .env (docker compose ile ortak) — ortam değişkenlerini ezmez."""
+    f = ROOT / ".env"
+    if not f.is_file():
+        return
+    for line in f.read_text(encoding="utf-8").splitlines():
+        k, sep, v = line.strip().partition("=")
+        if sep and k and not k.startswith("#"):
+            os.environ.setdefault(k.strip(), v.strip())
+
+
+_load_dotenv()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except ValueError:
+        return default
+
+
 DATA_DIR = Path(os.environ.get("KBU_DATA_DIR") or _default_data_dir())
-DB_PATH = Path(os.environ.get("KBU_DB_PATH") or DATA_DIR / "kbu.db")
+SQLITE_PATH = Path(os.environ.get("KBU_DB_PATH") or DATA_DIR / "kbu.db")   # yalnızca v1 verisini taşımak için
+
+# PostgreSQL (+ pgvector). docker compose ile gelen db servisi varsayılandır.
+DATABASE_URL = os.environ.get("KBU_DATABASE_URL") or (
+    f"postgresql://kbu:{os.environ.get('POSTGRES_PASSWORD', 'kbu')}@127.0.0.1:{os.environ.get('POSTGRES_PORT', '5432')}/kbu"
+)
+
+# Embedding (anlamsal arama): OpenAI uyumlu /v1/embeddings servisi (Ollama, vLLM, TEI, kurum LLM sunucusu).
+EMBED_URL = (os.environ.get("KBU_EMBED_URL") or "http://127.0.0.1:11434/v1").rstrip("/")
+EMBED_MODEL = os.environ.get("KBU_EMBED_MODEL") or "bge-m3"
+EMBED_API_KEY = os.environ.get("KBU_EMBED_API_KEY") or ""
+EMBED_DIM = _env_int("KBU_EMBED_DIM", 1024)
+EMBED_BATCH = _env_int("KBU_EMBED_BATCH", 64)
+EMBED_PARALLEL = _env_int("KBU_EMBED_PARALLEL", 2)
+
+# Uzak MCP erişim anahtarları (boşsa kimlik doğrulama kapalı)
+API_KEYS = {k.strip() for k in (os.environ.get("KBU_API_KEYS") or "").split(",") if k.strip()}
 
 REPO_URL = "https://github.com/1ffatihgur/kbu-mcp"
 USER_AGENT = f"KBU-MCP/{__version__} (+{REPO_URL})"
@@ -115,7 +152,15 @@ PER_HOST_CONCURRENCY = 3
 GLOBAL_CONCURRENCY = 24
 PER_HOST_DELAY = 0.25          # saniye
 REQUEST_TIMEOUT = 45.0
-MAX_FILE_BYTES = 60 * 1024 * 1024
+MAX_FILE_BYTES = _env_int("KBU_MAX_FILE_MB", 300) * 1024 * 1024
+MAX_OCR_PAGES = _env_int("KBU_MAX_OCR_PAGES", 300)   # çok büyük taranmış PDF'lerde OCR edilen sayfa tavanı
+# Tüm sitelere toplam saatlik istek sınırı (0 = yalnızca host başı gecikme). Üniversite sunucuları
+# yoğun istekte engelleyebildiği için üretimde sınır önerilir.
+CRAWL_MAX_PER_HOUR = _env_int("KBU_CRAWL_MAX_PER_HOUR", 0)
+MEDYA_HOST = "kbumedya.karabuk.edu.tr"
+MEDYA_MAX_AGE_DAYS = _env_int("KBU_MEDYA_MAX_AGE_DAYS", 730)   # KBÜ Medya: son 2 yıl
+UNIS_HOST = "unis.karabuk.edu.tr"
+PARSER_VERSION = 2   # çıkarıcı değişince eski sürümle işlenmiş belgeler koşulsuz yeniden indirilir
 MAX_DEPTH = 15
 MAX_PAGES_PER_HOST = 25000
 MAX_POSTBACK_PAGES = 150       # ASP.NET GridView sayfalama sınırı

@@ -1,7 +1,9 @@
-"""Sayfa ve dosyalardan metin çıkarma.
+"""Sayfa ve dosyalardan metin çıkarma — çıktı Markdown'dır.
 
 Her çıkarıcı bir Extracted döner. `sections` (sayfa_no, metin) listesidir:
 PDF/PPTX için gerçek sayfa/slayt numarası, diğerleri için None.
+HTML'de şablonun menü / üst bilgi / alt bilgi kısımları atılır; başlıklar `#`, listeler `-`,
+tablolar Markdown tablosu olarak yazılır.
 """
 
 import io
@@ -36,7 +38,7 @@ _MONTHS = {
     "kasim": 11, "aralık": 12, "aralik": 12,
 }
 _DATE_NUM = re.compile(r"\b(\d{1,2})[./](\d{1,2})[./](20\d{2})\b")
-_DATE_TXT = re.compile(r"\b(\d{1,2})\s+(" + "|".join(_MONTHS) + r")\s+(20\d{2})\b", re.IGNORECASE)
+_DATE_TXT = re.compile(r"\b(\d{1,2})\s+(" + "|".join(_MONTHS) + r"),?\s+(20\d{2})\b", re.IGNORECASE)  # "25 Şubat, 2025"
 
 
 def find_date(text: str) -> str | None:
@@ -70,7 +72,7 @@ def clean_text(s: str) -> str:
 
 # Site şablonlarında asıl içeriğin bulunduğu alanlar (öncelik sırasıyla).
 CONTENT_SELECTORS = [
-    "#txtIcerik", "#lblPostIcerik_Sayfa", "[id$=lblIcerik]", "[id$=txtIcerik]", "[id*=Icerik]",
+    ".tc-main-post-content", "#txtIcerik", "#lblPostIcerik_Sayfa", "[id$=lblIcerik]", "[id$=txtIcerik]", "[id*=Icerik]",
     ".entry-content", "article", "main", "#MainBlock", "#content", ".content",
 ]
 # Şablonun her sayfada tekrar eden kısımları.
@@ -79,23 +81,51 @@ BOILERPLATE_SELECTORS = [
     "#main-nav", "#main_nav", ".main-navigation", "#site-navigation", "#tophead", "#news-ticker",
     "#duyuruPage", "#duyuruModal", "#myModal", "#popupClass", ".modal", "#footerGrup",
     "#footer-widgets", ".footer-widgets", ".skip-link", ".screen-reader-text", ".breadcrumb",
+    "footer", "[id*=footer]", "[class*=footer]", "body > header", "#header", "#masthead", ".site-header", ".navbar",
+    ".top-menu", "#menu", ".topbar", "#topbar", ".header-top", ".sharing", ".share-icons", ".tc-next-prev-post", ".tc-next-prev-post-slider", "#copyUrlButton",
+    ".layout-navbar", ".layout-menu", ".content-footer", ".footer",
 ]
+# Yayın tarihinin bulunduğu alanlar (içerik metninde tarih geçmeyen haber sayfaları için)
+DATE_SELECTORS = [".meta-nav .author-side", "time[datetime]", ".entry-date", ".post-date", ".tarih", "[id$=lblTarih]"]
 FOOTER_CONTACT_SELECTORS = ["#Master_Label_Footer_Iletisim", "footer .iletisim", "#iletisim", ".site-info", "footer"]
 
 
+def _md_table(tbl) -> str:
+    rows = []
+    for tr in tbl.css("tr"):
+        cells = [re.sub(r"\s+", " ", c.text(separator=" ", strip=True)).replace("|", "/") for c in tr.css("td, th")]
+        if any(cells):
+            rows.append(cells)
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    if width == 1 or len(rows) == 1:
+        return "\n".join(" | ".join(c for c in r if c) for r in rows)
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    lines = ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
+    lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    return "\n".join(lines)
+
+
 def _node_text(node) -> str:
-    """Blok elemanlarında satır sonu koruyarak metin; tablolar satır satır."""
+    """Düğümü Markdown'a çevirir: başlıklar (#), listeler (-), tablolar (| a | b |), paragraflar."""
     for br in node.css("br"):
         br.replace_with("\n")
-    for tr in node.css("tr"):
-        cells = [c.text(separator=" ", strip=True) for c in tr.css("td, th")]
-        tr.replace_with("\n" + " | ".join(c for c in cells if c) + "\n")
-    for blk in node.css("p, div, li, h1, h2, h3, h4, h5, h6, section, article, ul, ol, table, dd, dt"):
+    for tbl in node.css("table"):
+        try:
+            tbl.replace_with("\n\n" + _md_table(tbl) + "\n\n")
+        except Exception:  # iç içe tablonun dış tablosu zaten değiştirildi
+            pass
+    for blk in node.css("p, div, li, section, article, ul, ol, dd, dt, blockquote"):
         blk.insert_before("\n")
         blk.insert_after("\n")
+    for h in node.css("h1, h2, h3, h4, h5, h6"):
+        h.insert_before("\n\n" + "#" * int(h.tag[1]) + " ")
+        h.insert_after("\n\n")
     for li in node.css("li"):
-        li.insert_before("• ")
-    return clean_text(node.text(separator="", strip=False))
+        li.insert_before("- ")
+    text = clean_text(node.text(separator="", strip=False))
+    return re.sub(r"^(#+) *\n+", r"\1 ", text, flags=re.M)  # başlık etiketi içindeki satır sonları
 
 
 def _postback_pages(html: str) -> list[tuple[str, str]]:
@@ -128,6 +158,14 @@ def extract_html(html: str, url: str) -> Extracted:
             ex.links.append((u, ""))
     ex.postback_pages = _postback_pages(html)
 
+    page_date = None
+    for sel in DATE_SELECTORS:
+        n = tree.css_first(sel)
+        if n:
+            page_date = find_date((n.attributes.get("datetime") or "") + " " + n.text(separator=" "))
+            if page_date:
+                break
+
     footer_contact = ""
     for sel in FOOTER_CONTACT_SELECTORS:
         n = tree.css_first(sel)
@@ -159,7 +197,7 @@ def extract_html(html: str, url: str) -> Extracted:
 
     if content is not None and not is_home:
         heading = None
-        for h in body.css("h1, h2, h3, .entry-title, .page-title, [id$=lblBaslik], [id*=Baslik]"):
+        for h in body.css(".tc-main-post-title h2, h1, h2, h3, .entry-title, .page-title, [id$=lblBaslik], [id*=Baslik]"):
             ht = clean_text(h.text(separator=" "))
             if 3 < len(ht) < 200 and ht != ex.site_title:
                 heading = ht
@@ -167,7 +205,7 @@ def extract_html(html: str, url: str) -> Extracted:
         ex.title = heading
         text = _node_text(content)
         if heading and heading not in text[:300]:
-            text = heading + "\n\n" + text
+            text = "# " + heading + "\n\n" + text
     else:
         text = _node_text(body)
 
@@ -179,7 +217,7 @@ def extract_html(html: str, url: str) -> Extracted:
         first = ex.text.split("\n", 1)[0].strip()
         ex.title = first[:150] if first else ex.site_title
     ex.sections = [(None, ex.text)]
-    ex.content_date = find_date(ex.text)
+    ex.content_date = page_date or find_date(ex.text)
     return ex
 
 

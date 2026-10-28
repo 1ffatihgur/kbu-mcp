@@ -1,5 +1,48 @@
 # Sürüm Notları
 
+## v2.0.0 (2026-10-29)
+
+28.10.2026 toplantısındaki revizeler. Sistem bir "veritabanında arama" olmaktan çıkıp hibrit bir arama motoruna dönüştü.
+
+### Arama motoru
+- **Hibrit arama:** PostgreSQL tam metin (Türkçe katlama, kök önekleri, eş anlamlılar, IDF + BM25F alan
+  ağırlıkları) **+** pgvector anlamsal arama (OpenAI uyumlu embedding servisi, varsayılan `bge-m3`) →
+  Reciprocal Rank Fusion, ardından tazelik (yeni tarihli belge önde). Embedding servisi yoksa anahtar kelimeyle sürer.
+- Sonuçlarda `kaynak` (`site` / `unis` / `medya` / `bologna`) ve `eslesme` (`anahtar`, `anlamsal`, ikisi) alanları;
+  `search(kaynak=...)` filtresi.
+- **`academic_profile`** aracı: bir hocanın UNIS profili, idari görevleri, tüm yayın/proje/tez/ödülleri, rehber
+  kaydı ve adının geçtiği en yeni site/medya belgeleri tek çağrıda.
+
+### Veri kaynakları ve parse kalitesi
+- **UNIS** (unis.karabuk.edu.tr): ~1.200 akademisyen; sitenin kendi veri uç noktasından akademisyen başına tek,
+  menüsüz Markdown belge (profil, araştırma alanları, atıf özetleri, tüm çalışmalar). 3 günde bir yenilenir.
+- **KBÜ Medya:** haber içeriği ve yayın tarihi doğru çıkarılıyor ("25 Şubat, 2025" biçimi); yalnızca son 2 yıl
+  (`KBU_MEDYA_MAX_AGE_DAYS`).
+- Tüm çıktılar **Markdown** (başlık, liste, tablo). Şablon menü / üst bilgi / alt bilgi temizliği genişletildi.
+- Büyük dosya sınırı 60 MB → 300 MB (`KBU_MAX_FILE_MB`), OCR sayfa tavanı (`KBU_MAX_OCR_PAGES`).
+- Çıkarıcı sürümü (`docs.parser`): çıkarıcı değişince belgeler koşullu GET'e takılmadan yeniden işlenir.
+- `kbu sample`: tam taramadan önce 5 site sayfası + 10 UNIS hocası + 10 KBÜ Medya haberiyle parse doğruluk raporu.
+
+### Altyapı
+- **SQLite → PostgreSQL 17 + pgvector.** `kbu migrate-sqlite` v1 indeksini taramadan taşır.
+- **Docker production:** `Dockerfile` (Tesseract Türkçe dahil) ve `docker-compose.yml` (`db`, `mcp`, `worker`).
+- **İş kuyruğu:** `kbu jobs add site --all | unis | medya | …`, `kbu worker`. Durdurulan/çöken iş kaldığı yerden
+  sürer, başarısız iş 3 kez denenir, nedeni `kbu jobs list` / `kbu errors` ile görülür.
+- **Saatlik istek sınırı:** `KBU_CRAWL_MAX_PER_HOUR` (tüm sitelere toplam).
+- **Kimlik doğrulama:** `KBU_API_KEYS`; `Authorization: Bearer`, `X-API-Key` veya `?key=`.
+
+### Cevap kalitesi
+- Model KBÜ ile ilgili her soruda araçları kendiliğinden kullanır ("MCP kullan" demek gerekmez).
+- Kapsam kısıtı: KBÜ dışı sorulara cevap verilmez; UNIS ve KBÜ Medya kapsam içindedir.
+- Bulunamayan bilgi uydurulmaz, başka üniversitenin bilgisi verilmez; cevaplar "Kaynaklar" ve
+  "Şunları da sorabilirsiniz" bölümleriyle biter. Aynı kurallar `kbu_asistan` MCP prompt'u olarak da sunulur.
+
+### Düzeltilen hatalar
+- Geçici bağlantı hatası, OCR ile okunmuş belgeleri aramadan düşürüyordu ("Yemekhane Fiyat Listesi" toplantıda bu
+  yüzden bulunamadı). Artık yalnızca iki kez 404/410 alan belge kaldırılır.
+- Günlük tam yenileme sırasında yeniden kontrol kuyruğundaki belgeler aramada görünmüyordu.
+
+
 ## v1.1.0 (2026-10-25)
 
 ### Yeni: Uzak (Remote) MCP

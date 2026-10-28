@@ -36,6 +36,6 @@ async def refresh_people(conn) -> int:
                 tuple(r.get(k) for k in ("tip", "unvan", "ad", "soyad", "gorev", "birim", "telefon", "dahili", "eposta")) + (search,),
             )
         conn.execute("DELETE FROM units WHERE source='rehber'")
-        conn.executemany("INSERT OR IGNORE INTO units(name, source) VALUES(?, 'rehber')", [(n,) for n in opts["birimler"]])
+        conn.executemany("INSERT INTO units(name, source) VALUES(?, 'rehber') ON CONFLICT DO NOTHING", [(n,) for n in opts["birimler"]])
         db.set_meta(conn, "people_refreshed", now_iso())
     return len(rows)

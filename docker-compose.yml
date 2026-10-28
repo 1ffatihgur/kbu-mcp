@@ -1,0 +1,63 @@
+# KBÜ MCP — üretim kurulumu (PostgreSQL + pgvector, MCP sunucusu, tarama işçisi)
+#
+#   cp .env.example .env        # parolaları ve API anahtarlarını düzenleyin
+#   docker compose up -d --build
+#
+# Servisler:
+#   db     : PostgreSQL 17 + pgvector (belgeler, parçalar, tam metin + vektör indeksi, kuyruk)
+#   mcp    : uzak MCP sunucusu (Streamable HTTP, :7860/mcp), kimlik doğrulamalı
+#   worker : kuyruk işçisi — tarama işleri, zamanlanmış güncellemeler, OCR, embedding
+# Yedek:   docker compose exec db pg_dump -U kbu -Fc kbu > kbu_$(date +%F).dump
+
+x-app: &app
+  build: .
+  image: kbu-mcp:2
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    KBU_DATABASE_URL: postgresql://kbu:${POSTGRES_PASSWORD:-kbu}@db:5432/kbu
+    KBU_DATA_DIR: /data
+  volumes:
+    - appdata:/data
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kbu
+      POSTGRES_USER: kbu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kbu}
+    command: postgres -c shared_buffers=1GB -c maintenance_work_mem=1GB -c work_mem=64MB -c max_wal_size=4GB
+    shm_size: 1g
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # yalnızca sunucunun kendisinden erişim
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kbu -d kbu"]
+      interval: 5s
+      retries: 20
+
+  mcp:
+    <<: *app
+    command: ["kbu", "serve", "--http", "--port", "7860"]
+    environment:
+      KBU_DATABASE_URL: postgresql://kbu:${POSTGRES_PASSWORD:-kbu}@db:5432/kbu
+      KBU_DATA_DIR: /data
+      KBU_AUTO_UPDATE: "0"          # güncellemeleri worker yapar
+    ports:
+      - "${MCP_PORT:-7860}:7860"
+
+  worker:
+    <<: *app
+    command: ["kbu", "worker"]
+    healthcheck:
+      disable: true
+
+volumes:
+  pgdata:
+  appdata:

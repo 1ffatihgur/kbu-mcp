@@ -48,5 +48,10 @@
   {"cat": "birim", "query": "teknoloji transfer ofisi", "expect": "teknoloji transfer"},
   {"cat": "birim", "query": "kariyer merkezi", "expect": "kariyer"},
   {"cat": "iletisim", "query": "bilgi işlem daire başkanlığı iletişim", "expect": "bilgi işlem"},
-  {"cat": "mevzuat", "query": "lisansüstü eğitim yönetmeliği tez savunma", "expect": "tez"}
+  {"cat": "mevzuat", "query": "lisansüstü eğitim yönetmeliği tez savunma", "expect": "tez"},
+  {"cat": "kabul", "query": "yemekhane ücretleri ne kadar", "expect": "Yemek Ucreti", "expect_url": "12625062026154907"},
+  {"cat": "kabul", "query": "yemekhane çalışma saatleri", "expect": "11.30-13.30"},
+  {"cat": "kabul", "query": "İlker Türker yayınları", "expect": "Yayınlar", "expect_url": "akademisyen-detay/iturker"},
+  {"cat": "kabul", "query": "Teknoloji transfer ofisi koordinatörü", "expect": "koordinat"},
+  {"cat": "kabul", "query": "KBÜ akademisyenleri ScholarGPS listesi", "expect": "ScholarGPS"}
 ]

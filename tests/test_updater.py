@@ -9,7 +9,7 @@ from kbu_mcp import config, updater
 @pytest.fixture
 def tmp_data(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "kbu.db")
+    monkeypatch.setattr(config, "DATABASE_URL", "postgresql://kbu:x@127.0.0.1:1/kbu")  # erişilemeyen veritabanı
     monkeypatch.setattr(updater, "LOCK_PATH", tmp_path / "update.lock")
     return tmp_path
 

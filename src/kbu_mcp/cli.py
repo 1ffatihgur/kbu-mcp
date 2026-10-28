@@ -1,4 +1,5 @@
-"""Komut satırı: kbu update | status | search | stats | crawl | refresh | people | ocr | reindex | serve"""
+"""Komut satırı: kbu update | status | search | stats | crawl | refresh | unis | people | ocr | embed | jobs | worker |
+errors | sample | migrate-sqlite | reindex | queries | serve"""
 
 import argparse
 import asyncio
@@ -94,6 +95,88 @@ def cmd_ocr(args) -> None:
         print(json.dumps(run_ocr(conn, limit=args.limit, heartbeat=heartbeat), ensure_ascii=False))
 
 
+def cmd_unis(args) -> None:
+    from .unis import refresh_unis
+    from .updater import heartbeat
+
+    with _locked():
+        conn = db.connect()
+        db.init(conn)
+        print(json.dumps(asyncio.run(refresh_unis(conn, limit=args.limit, users=args.user, heartbeat=heartbeat)), ensure_ascii=False))
+
+
+def cmd_embed(args) -> None:
+    from .embed import run_embed, status
+    from .updater import heartbeat
+
+    conn = db.connect()
+    db.init(conn)
+    if args.status:
+        print(json.dumps(status(conn), ensure_ascii=False))
+        return
+    with _locked():
+        print(json.dumps(run_embed(conn, limit=args.limit, heartbeat=heartbeat), ensure_ascii=False))
+
+
+def cmd_jobs(args) -> None:
+    from . import jobs
+
+    conn = db.connect()
+    db.init(conn)
+    if args.action == "add":
+        targets = args.targets
+        if args.kind == "site" and args.all:
+            targets = jobs.all_site_seeds(conn)
+        try:
+            ids = jobs.add(conn, args.kind, targets or None)
+        except ValueError as e:
+            sys.exit(str(e))
+        print(f"{len(ids)} iş sırada: {ids[:20]}{' ...' if len(ids) > 20 else ''}  (çalıştırmak için: kbu worker)")
+    elif args.action == "retry":
+        conn.execute("UPDATE jobs SET status='pending', attempts=0 WHERE status='failed'" + (" AND id=?" if args.targets else ""),
+                     tuple(args.targets[:1]))
+        conn.commit()
+    else:
+        for j in reversed(jobs.listing(conn, args.limit)):
+            err = (j["error"] or "").split("\n", 1)[0]
+            print(f"#{j['id']:<5} {j['status']:<8} {j['kind']:<10} {(j['target'] or ''):<45} deneme={j['attempts']} "
+                  f"{j['finished_at'] or j['started_at'] or j['created_at']}  {err}")
+
+
+def cmd_worker(args) -> None:
+    from .jobs import worker
+
+    worker(schedule=not args.no_schedule)
+
+
+def cmd_errors(args) -> None:
+    """Taranamayan adresler ve nedenleri (site başına)."""
+    conn = db.connect(readonly=True)
+    where, params = "status IN ('error','skipped')", []
+    if args.host:
+        where += " AND host = ?"
+        params.append(args.host)
+    rows = conn.execute(
+        f"""SELECT host, split_part(COALESCE(error, '?'), ':', 1) AS neden, COUNT(*) AS n, MIN(url) AS ornek
+            FROM docs WHERE {where} GROUP BY 1, 2 ORDER BY 3 DESC LIMIT ?""", (*params, args.limit)).fetchall()
+    for r in rows:
+        print(f"{r['n']:>6}  {r['host']:<35} {r['neden'][:45]:<45} örn: {r['ornek']}")
+
+
+def cmd_sample(args) -> None:
+    from .sample import main
+
+    out = main(args.url)
+    print((out / "RAPOR.md").read_text(encoding="utf-8"))
+    print(f"Markdown çıktılar: {out}")
+
+
+def cmd_migrate(args) -> None:
+    from .migrate import migrate
+
+    print(json.dumps(migrate(args.path), ensure_ascii=False))
+
+
 def cmd_reindex(args) -> None:
     from .indexer import rebuild_fts
 
@@ -127,9 +210,10 @@ def cmd_search(args) -> None:
     from .search import search
 
     conn = db.connect(readonly=True)
-    res = search(conn, args.query, unit=args.unit, kind=args.kind, limit=args.limit)
+    res = search(conn, args.query, unit=args.unit, kind=args.kind, limit=args.limit, source=args.source,
+                 semantic=not args.keyword_only)
     for r in res:
-        print(f"\n### {r['baslik']}  [{r['tur']}] {r['tarih'] or ''}  skor={r['skor']}\n{r['url']}")
+        print(f"\n### {r['baslik']}  [{r['kaynak']}/{r['tur']}] {r['tarih'] or ''}  skor={r['skor']} ({r['eslesme']})\n{r['url']}")
         for p in r["parcalar"][:1]:
             print(("  s." + str(p["sayfa"]) + " " if p["sayfa"] else "  ") + p["metin"][:400].replace("\n", " ⏎ "))
 
@@ -190,6 +274,41 @@ def main(argv=None) -> None:
     p.add_argument("--limit", type=int)
     p.set_defaults(func=cmd_ocr)
 
+    p = sub.add_parser("unis", help="UNIS akademisyen profillerini (yayın, proje, tez, idari görev) indeksle")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--user", action="append", help="Yalnızca bu UNIS kullanıcı adı (ör. iturker)")
+    p.set_defaults(func=cmd_unis)
+
+    p = sub.add_parser("embed", help="Anlamsal arama için eksik embedding'leri doldur")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--status", action="store_true")
+    p.set_defaults(func=cmd_embed)
+
+    p = sub.add_parser("jobs", help="İş kuyruğu: add <tür> [url...] | list | retry [id]")
+    p.add_argument("action", choices=["add", "list", "retry"])
+    p.add_argument("kind", nargs="?", default="site", help="site | unis | medya | update | update_hot | people | ocr | embed")
+    p.add_argument("targets", nargs="*", help="site işleri için başlangıç adresleri (retry için iş no)")
+    p.add_argument("--all", action="store_true", help="site: bilinen bütün siteler için birer iş")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_jobs)
+
+    p = sub.add_parser("worker", help="Kuyruk işçisi: işleri sırayla çalıştırır, boşta zamanlanmış güncellemeleri yapar")
+    p.add_argument("--no-schedule", action="store_true", help="Sadece kuyruktaki işler (zamanlayıcı kapalı)")
+    p.set_defaults(func=cmd_worker)
+
+    p = sub.add_parser("errors", help="Taranamayan adresler ve nedenleri")
+    p.add_argument("--host")
+    p.add_argument("--limit", type=int, default=40)
+    p.set_defaults(func=cmd_errors)
+
+    p = sub.add_parser("sample", help="Küçük ölçekli parse testi (site + UNIS + KBÜ Medya örnekleri → data/sample)")
+    p.add_argument("--url", action="append", help="Kendi seçtiğiniz adresler")
+    p.set_defaults(func=cmd_sample)
+
+    p = sub.add_parser("migrate-sqlite", help="v1 SQLite indeksini (data/kbu.db) PostgreSQL'e taşı")
+    p.add_argument("path", nargs="?")
+    p.set_defaults(func=cmd_migrate)
+
     p = sub.add_parser("reindex", help="Tam metin indeksini mevcut parçalardan yeniden kur")
     p.set_defaults(func=cmd_reindex)
 
@@ -202,6 +321,8 @@ def main(argv=None) -> None:
     p.add_argument("query")
     p.add_argument("--unit")
     p.add_argument("--kind")
+    p.add_argument("--source", help="site | unis | medya | bologna")
+    p.add_argument("--keyword-only", action="store_true", help="Anlamsal aramayı kapat")
     p.add_argument("--limit", type=int, default=8)
     p.set_defaults(func=cmd_search)
 
@@ -216,7 +337,7 @@ def main(argv=None) -> None:
     p.set_defaults(func=cmd_serve)
 
     args = ap.parse_args(argv)
-    if args.cmd not in ("serve", "status"):
+    if args.cmd not in ("serve", "status", "jobs", "errors"):
         _setup_logging(args.verbose)
     args.func(args)
 

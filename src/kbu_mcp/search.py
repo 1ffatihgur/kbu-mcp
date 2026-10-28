@@ -1,10 +1,22 @@
-"""İndeks üzerinde arama: FTS5 BM25 + başlık/birim ağırlığı + tazelik etkisi."""
+"""Hibrit arama: PostgreSQL tam metin (anahtar kelime) + pgvector (anlamsal) → Reciprocal Rank Fusion.
 
+1. Anahtar kelime: Türkçe katlanmış tsvector, kök önekleri (muhendisli:*), başlık/birim ağırlıkları;
+   sonuçlar başlık/birim kapsamı, iletişim niyeti ve bölüm alt sitesi kurallarıyla yeniden puanlanır.
+2. Anlamsal: sorgu embedding'ine en yakın parçalar (eş anlamlı / farklı ifade edilmiş sorular).
+3. RRF: iki sıralama birleştirilir; ardından tazelik (yeni tarihli belge öne) uygulanır.
+"""
+
+import logging
 import math
+import os
 import re
+import time
 from datetime import date
 
-from .textnorm import STOPWORDS, build_fts_query, fold, normalize_for_index, phrase_query, query_terms, stem, words
+from . import embed
+from .textnorm import STOPWORDS, _ts, build_tsquery, fold, normalize_for_index, phrase_query, query_terms, stem, words
+
+log = logging.getLogger("kbu.search")
 
 QUESTION_WORDS = STOPWORDS - {"üniversitesi", "üniversite", "karabük", "kbü", "kbu"}
 
@@ -73,68 +85,193 @@ def _boost(qstems: list[str], title_norm: str, unit_norm: str, url: str, body_no
 
 
 def _unit_filter(unit: str | None) -> str | None:
+    """Birim adı → yalnızca birim etiketinde (ağırlık B) geçen önekler."""
     if not unit:
         return None
     toks = [re.sub(r"[^0-9a-z]", "", fold(w)) for w in words(unit)]
     toks = [t for t in toks if len(t) >= 2]
     if not toks:
         return None
-    return "unit : (" + " AND ".join(f"{t[:6]}*" if len(t) >= 3 else t for t in toks) + ")"
+    return " & ".join(f"{t[:6]}:*B" if len(t) >= 3 else f"{t}:B" for t in toks)
 
 
-def search(conn, query: str, unit: str | None = None, kind: str | None = None, date_from: str | None = None,
-           limit: int = 8, chunks_per_doc: int = 2) -> list[dict]:
-    exprs = []
-    p = phrase_query(query)
-    for mode in ("and", "or"):
-        q = build_fts_query(query, mode)
-        if q:
-            exprs.append(q)
-    if not exprs:
-        return []
-    uf = _unit_filter(unit)
-    kinds = KIND_NAMES.get((kind or "").lower()) if kind else None
+SOURCES = {"site", "unis", "medya", "bologna"}
+RRF_K = 60
+# Anahtar kelime sıralaması alan kurallarını (başlık, birim, iletişim niyeti) içerdiği için daha ağır basar;
+# anlamsal sıralama eş anlamlı / farklı ifade edilmiş soruları yakalar.
+SEMANTIC_WEIGHT = float(os.environ.get("KBU_SEMANTIC_WEIGHT", "0.6"))
+_COLS = """c.id AS chunk_id, c.doc_id, c.page, c.text, c.unit_n, c.tags, d.url, d.final_url, d.kind, d.title,
+           d.site_title, d.anchor_text, d.content_date, d.checked_at, d.needs_ocr, d.source"""
+_TAG_WORDS = {"telefon": "numara dahili iletisim", "eposta": "eposta mail iletisim"}
 
+
+def _filters(kinds, date_from, source) -> tuple[str, list]:
+    sql, params = " AND d.status IN ('ok', 'recheck')", []  # 'recheck': yeniden kontrol sırasında da aranabilir
+    if kinds:
+        sql += f" AND d.kind IN ({','.join('?' * len(kinds))})"
+        params += kinds
+    if date_from:
+        sql += " AND d.content_date >= ?"
+        params.append(date_from)
+    if source:
+        sql += " AND d.source = ?"
+        params.append(source)
+    return sql, params
+
+
+def _ts_group(g: list[str]) -> str:
+    return "(" + " | ".join(_ts(t) for t in g) + ")" if len(g) > 1 else _ts(g[0])
+
+
+_DF_CACHE: dict[str, tuple[float, int]] = {}
+_W = "'{0.05, 0.17, 0.33, 1.0}'"   # D, C (gövde), B (birim), A (başlık) — v1'deki BM25 ağırlıklarıyla aynı oran
+
+
+def _idf(conn, term_q: str) -> float:
+    """BM25 tarzı IDF: nadir terimler (ör. 'bilgisayar') sık terimlerden ('mühendislik') daha belirleyici.
+    PostgreSQL ts_rank IDF içermediği için terim başına belge sıklığı ölçülür (1 saat önbellek)."""
+    now = time.time()
+    hit = _DF_CACHE.get(term_q)
+    if hit and now - hit[0] < 3600:
+        return hit[1]
+    n = _DF_CACHE.get("__N__")
+    if not n or now - n[0] > 3600:
+        n = (now, conn.execute("SELECT reltuples::bigint FROM pg_class WHERE relname='chunks'").fetchone()[0] or 1)
+        _DF_CACHE["__N__"] = n
+    df = conn.execute("SELECT COUNT(*) FROM chunks WHERE tsv @@ to_tsquery('simple', ?)", (term_q,)).fetchone()[0]
+    idf = math.log(1 + (n[1] - df + 0.5) / (df + 0.5))
+    if len(_DF_CACHE) > 5000:
+        _DF_CACHE.clear()
+    _DF_CACHE[term_q] = (now, idf)
+    return idf
+
+
+# BM25F: alan ağırlıkları (başlık, birim, gövde), k1, b ve ortalama alan uzunlukları (kelime)
+_FIELD_W = (6.0, 2.0, 1.0)
+_AVG_LEN = (8.0, 12.0, 230.0)
+_K1, _B = 1.2, 0.75
+
+
+def _tf(term_groups: list[list[str]], tokens: list[str]) -> list[int]:
+    """Her kelime grubu için alandaki eşleşme sayısı (önek 'x*', tam '"x"', ifade '"a b"')."""
+    out = []
+    for g in term_groups:
+        n = 0
+        for t in g:
+            if t.endswith("*"):
+                p = t[:-1]
+                n += sum(1 for w in tokens if w.startswith(p))
+            else:
+                ws = t.strip('"').split()
+                if len(ws) == 1:
+                    n += tokens.count(ws[0])
+                else:
+                    n += sum(1 for k in range(len(tokens) - len(ws) + 1) if tokens[k:k + len(ws)] == ws)
+        out.append(n)
+    return out
+
+
+def _bm25f(term_groups, idfs, fields: tuple[list[str], list[str], list[str]]) -> float:
+    """v1'deki SQLite FTS5 bm25(6, 2, 1) ile aynı mantık: terim tekrarı doygun, uzun parça cezalı."""
+    score = 0.0
+    for w, avg, toks in zip(_FIELD_W, _AVG_LEN, fields):
+        if not toks:
+            continue
+        norm = _K1 * (1 - _B + _B * len(toks) / avg)
+        for idf, tf in zip(idfs, _tf(term_groups, toks)):
+            if tf:
+                score += w * idf * tf * (_K1 + 1) / (tf + norm)
+    return score
+
+
+def _keyword(conn, query, uf, kinds, date_from, source, limit) -> dict[int, dict]:
     qstems = _query_stems(query)
     hits: dict[int, dict] = {}
-    for i, expr in enumerate(exprs):
-        match = f"({expr}) AND {uf}" if uf else expr
-        sql = """
-            SELECT c.id AS chunk_id, c.doc_id, c.page, c.text, d.url, d.final_url, d.kind, d.title, d.site_title,
-                   d.anchor_text, d.content_date, d.checked_at, d.needs_ocr,
-                   chunks_fts.unit AS unit_n, chunks_fts.body AS body_n, bm25(chunks_fts, 6.0, 2.0, 1.0) AS rank
-            FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN docs d ON d.id = c.doc_id
-            WHERE chunks_fts MATCH ? AND d.status = 'ok'
-        """
-        params: list = [match]
-        if kinds:
-            sql += f" AND d.kind IN ({','.join('?' * len(kinds))})"
-            params += kinds
-        if date_from:
-            sql += " AND d.content_date >= ?"
-            params.append(date_from)
-        sql += " ORDER BY rank LIMIT 300"
+    fsql, fparams = _filters(kinds, date_from, source)
+    term_groups = query_terms(query)
+    groups = [_ts_group(g) for g in term_groups]
+    try:
+        idfs = [_idf(conn, g) for g in groups]
+    except Exception as e:
+        log.warning("IDF hesaplanamadı: %s", e)
+        idfs = [1.0] * len(groups)
+    # Aday seçimi PostgreSQL'de (IDF ağırlıklı ts_rank), son puan Python'da BM25F ile
+    rank_sql = " + ".join(f"{idf:.4f} * ts_rank({_W}, c.tsv, to_tsquery('simple', ?), 33)" for idf in idfs) or "0"
+    for i, mode in enumerate(("and", "or")):
+        expr = build_tsquery(query, mode)
+        if not expr:
+            return hits
+        if uf:
+            expr = f"({expr}) & ({uf})"
+        sql = f"""SELECT {_COLS}, ({rank_sql}) AS rank
+                  FROM chunks c JOIN docs d ON d.id = c.doc_id
+                  WHERE c.tsv @@ to_tsquery('simple', ?) {fsql} ORDER BY rank DESC LIMIT 800"""
         try:
-            rows = conn.execute(sql, params).fetchall()
-        except Exception:
+            rows = conn.execute(sql, [*groups, expr, *fparams]).fetchall()
+        except Exception as e:
+            log.warning("anahtar kelime sorgusu hatası (%s): %s", expr, e)
             continue
         penalty = 1.0 if i == 0 else 0.55  # OR sonuçları AND sonuçlarının gerisinde kalsın
         for r in rows:
             title_norm = normalize_for_index(" ".join(x for x in (r["title"], r["anchor_text"]) if x))
-            score = -r["rank"] * penalty * _recency_factor(r["content_date"]) * _boost(
-                qstems, title_norm, r["unit_n"], r["final_url"] or r["url"], r["body_n"][-60:])
+            tags_n = " ".join(_TAG_WORDS[t] for t in (r["tags"] or "").split() if t in _TAG_WORDS)
+            body = (normalize_for_index(r["text"]) + " " + tags_n).split()
+            bm25 = _bm25f(term_groups, idfs, (title_norm.split(), (r["unit_n"] or "").split(), body))
+            score = bm25 * penalty * _boost(qstems, title_norm, r["unit_n"] or "", r["final_url"] or r["url"], tags_n)
             prev = hits.get(r["chunk_id"])
-            if not prev or prev["score"] < score:
-                hits[r["chunk_id"]] = {**dict(r), "score": score}
+            if not prev or prev["kw"] < score:
+                hits[r["chunk_id"]] = {**dict(r), "kw": score}
         if i == 0 and len({h["doc_id"] for h in hits.values()}) >= limit:
             break
-
-    # Tam ifade geçen parçalara ek puan
-    if p:
+    p = phrase_query(query)
+    if p:  # tam ifade geçen parçalara ek puan
         needle = p.strip('"')
         for h in hits.values():
             if needle in normalize_for_index(h["text"]):
-                h["score"] *= 1.5
+                h["kw"] *= 1.5
+    return hits
+
+
+def _semantic(conn, query, uf, kinds, date_from, source, k: int = 80) -> list[dict]:
+    vec = embed.query_vector(query)
+    if not vec:
+        return []
+    fsql, fparams = _filters(kinds, date_from, source)
+    if uf:
+        fsql += " AND c.tsv @@ to_tsquery('simple', ?)"
+        fparams.append(uf)
+    sql = f"""SELECT {_COLS}, c.embedding <=> ?::halfvec AS dist
+              FROM chunks c JOIN docs d ON d.id = c.doc_id
+              WHERE c.embedding IS NOT NULL {fsql} ORDER BY c.embedding <=> ?::halfvec LIMIT {k}"""
+    try:
+        with conn.pg.transaction():
+            conn.execute("SET LOCAL hnsw.ef_search = 200")
+            # pgvector ≥ 0.8: filtreli aramada HNSW sonuç eksiltmesin
+            conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+            return [dict(r) for r in conn.execute(sql, [vec, *fparams, vec]).fetchall()]
+    except Exception as e:
+        log.warning("anlamsal arama hatası: %s", e)
+        return []
+
+
+def search(conn, query: str, unit: str | None = None, kind: str | None = None, date_from: str | None = None,
+           limit: int = 8, chunks_per_doc: int = 2, source: str | None = None, semantic: bool = True) -> list[dict]:
+    uf = _unit_filter(unit)
+    kinds = KIND_NAMES.get((kind or "").lower()) if kind else None
+    source = source if source in SOURCES else None
+
+    hits = _keyword(conn, query, uf, kinds, date_from, source, limit)
+    sem = _semantic(conn, query, uf, kinds, date_from, source) if semantic else []
+
+    # Reciprocal Rank Fusion: anahtar kelime sıralaması (kurallarla yeniden puanlanmış) + anlamsal sıralama
+    for rank, h in enumerate(sorted(hits.values(), key=lambda x: -x["kw"]), start=1):
+        h["score"] = 1.0 / (RRF_K + rank)
+    for rank, r in enumerate(sem, start=1):
+        h = hits.setdefault(r["chunk_id"], {**r, "score": 0.0})
+        h["score"] += SEMANTIC_WEIGHT / (RRF_K + rank)
+        h["sem"] = True
+    for h in hits.values():
+        h["score"] *= _recency_factor(h["content_date"])
 
     by_doc: dict[int, list[dict]] = {}
     for h in sorted(hits.values(), key=lambda x: -x["score"]):
@@ -148,6 +285,7 @@ def search(conn, query: str, unit: str | None = None, kind: str | None = None, d
         top = lst[0]
         results.append({
             "url": top["final_url"] or top["url"],
+            "kaynak": top["source"],
             "tur": top["kind"],
             "baslik": top["anchor_text"] if top["kind"] != "html" and top["anchor_text"] else top["title"],
             "birim_sitesi": top["site_title"],
@@ -156,7 +294,8 @@ def search(conn, query: str, unit: str | None = None, kind: str | None = None, d
             # needs_ocr: 1 = taranmış, metin eksik; 2 = OCR ile okundu; 3 = OCR denendi, okunamadı
             "ocr_gerekebilir": top["needs_ocr"] in (1, 3),
             "ocr_ile_okundu": top["needs_ocr"] == 2,
-            "skor": round(top["score"], 2),
+            "eslesme": ("anahtar+anlamsal" if "kw" in top else "anlamsal") if top.get("sem") else "anahtar",
+            "skor": round(top["score"] * 1000, 2),
             "parcalar": [{"sayfa": h["page"], "metin": h["text"]} for h in lst],
         })
     return results

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -24,40 +25,54 @@ from .textnorm import normalize_for_index
 log = logging.getLogger("kbu.server")
 
 INSTRUCTIONS = """\
-Bu sunucu Karabük Üniversitesi'nin resmi web sitesi (*.karabuk.edu.tr) içeriğine erişim sağlar.
-Üniversiteyle ilgili HER soruda şu kurallara uy:
+Sen Karabük Üniversitesi (KBÜ) asistanısın. Bu sunucu KBÜ'nün resmi web siteleri (*.karabuk.edu.tr), oradaki
+PDF/Word/Excel belgeleri (taranmış belgeler OCR ile okunmuş), UNIS akademik veri sistemi (akademisyen profilleri,
+yayınlar, projeler, tezler) ve KBÜ Medya haberlerine (son 2 yıl) erişim sağlar.
 
-1. Cevabı YALNIZCA bu araçların döndürdüğü içeriğe dayandır. Genel bilgini, tahminini veya başka
-   kaynakları kullanma. Araçlarda bulamadığın bilgiyi "sitede bulamadım" diye açıkça söyle ve
-   kullanıcıyı en ilgili sayfaya (URL) yönlendir.
-2. Her bilgi için kaynak URL'sini (PDF ise sayfa numarasını) ve belgenin tarihini / son kontrol
-   zamanını ver.
-3. Doğru araç seçimi:
-   - Kişi, telefon, dahili numara, e-posta, "sekreter", "bölüm başkanı" vb. → phone_directory
-     (gerekirse ardından search ile bölümün "iletişim"/"personel" sayfası).
-   - "X'in dekanı / müdürü / bölüm başkanı / rektör yardımcıları kim?" → phone_directory(birim=..., gorev_icerir="dekan")
-     ile rehberin görev sütununa bak, birimin yönetim sayfasıyla (search) doğrula. search sonucundaki
-     `rehber_kayitlari` alanı da bu soruların cevabını içerebilir.
-   - Yemek menüsü → food_menu. Akademik takvim / sınav-ders başlangıç tarihleri → academic_calendar.
-   - Bir birimin güncel duyuruları → latest_announcements.
-   - Ders planı / müfredat, AKTS, haftalık ders saatleri, program kontenjanı, mezuniyet koşulları,
-     program çıktıları, kabul koşulları → search(..., unit="bologna") (OBS Bologna Bilgi Paketi).
-   - Diğer her şey (yönetmelik, yönerge, başvuru, burs, harç, staj, Erasmus, kontenjan, ders
-     programı, sınav programı, formlar, birimler, haberler...) → search, ardından en ilgili
-     sonucun tamamını read_document ile oku.
-4. search sonuçları parça (snippet) içerir; kesin bilgi (tarih, sayı, isim, madde) vermeden önce
-   ilgili belgeyi read_document ile oku. Gerekirse farklı kelimelerle (eş anlamlı, kısaltma,
-   birim adı) birkaç kez ara; birim adını `unit` filtresiyle daralt.
-5. Aynı konuda birden fazla belge varsa (ör. eski ve yeni yönetmelik, farklı yılların takvimi)
-   EN GÜNCEL tarihli olanı esas al, eskisi olduğunu belirt; çelişki varsa kullanıcıya söyle.
-6. Bilgi bir bölüm/birim düzeyindeyse doğru birimin sitesinden geldiğinden emin ol
-   (ör. Bilgisayar Mühendisliği → bbf.karabuk.edu.tr/bilgisayar; Bilgisayar ve Bilişim Bilimleri Fakültesi).
-   Telefon rehberinde birimler fakülte düzeyindedir: aynı fakültede birden fazla "Bölüm Sekreteri"
-   çıkarsa, bölüm sitesinin üst bilgisindeki bölüm telefonunu (ör. akademikPersonel.aspx?BA=bilgisayar
-   veya bölüm ana sayfası) rehberdeki dahili numarayla eşleştirerek doğru kişiyi belirle; eşleşmezse
-   adayların hepsini belirsizliği açıkça söyleyerek ver.
-   Alt site sayfalarında BA parametresi bölümü gösterir (BA=bilgisayar, BA=yazilim ...).
-7. Giriş gerektiren sistemler (OBS, EBYS, e-posta vb.) ve kişisel öğrenci bilgileri kapsam dışıdır.
+KAPSAM
+- KBÜ ile ilgili HER soruda bu araçları kendiliğinden kullan; kullanıcının "MCP kullan" demesini bekleme.
+  Yemekhane, ücretler, akademisyenler, birimler, duyurular, yönetmelikler, haberler, takvim, telefonlar... hepsi kapsamdadır.
+- KBÜ ile ilgisi olmayan sorulara (siyaset, güncel olaylar, genel kültür, başka üniversiteler, kod yazma vb.)
+  cevap verme: "Ben yalnızca Karabük Üniversitesi hakkında bilgi verebilirim." de ve KBÜ ile ilgili ne
+  sorabileceğini öner. KBÜ'deki kişiler, KBÜ Medya haberleri ve UNIS akademik verileri KAPSAM İÇİNDEDİR.
+
+DOĞRULUK
+1. Cevabı YALNIZCA bu araçların döndürdüğü içeriğe dayandır. Genel bilgini, tahminini veya başka kaynakları kullanma.
+2. Bulamadığın bilgiyi ASLA uydurma ya da başka bir üniversitenin / genel internetin bilgisini verme (ücret, tarih,
+   sayı, isim, telefon). "Bu bilgiye KBÜ kaynaklarında erişemedim" de ve en ilgili sayfayı (URL) öner.
+3. Kesin bilgi (tarih, sayı, ücret, isim, madde) vermeden önce ilgili belgeyi read_document ile oku; search sonuçları
+   yalnızca parçadır. Bulamazsan farklı kelimelerle (eş anlamlı, kısaltma, birim adı) birkaç kez daha ara.
+4. Aynı konuda birden fazla belge varsa EN GÜNCEL tarihli olanı esas al, eskisini belirt; çelişki varsa söyle.
+
+CEVAP BİÇİMİ
+- Sonunda "Kaynaklar" başlığıyla kullandığın her belgenin başlığını, URL'sini (PDF ise sayfa numarasını) ve
+  tarihini / son kontrol zamanını yaz; ayrıntı için kullanıcıyı ilgili PDF'e / sayfaya yönlendir.
+- En sona, konuyla ilgili kullanıcının sorabileceği 2-3 kısa soruyu "Şunları da sorabilirsiniz:" başlığıyla öner.
+
+ARAÇ SEÇİMİ
+- Kişi, telefon, dahili numara, e-posta, "sekreter", "bölüm başkanı" vb. → phone_directory
+  (gerekirse ardından search ile bölümün "iletişim"/"personel" sayfası).
+- "X'in dekanı / müdürü / bölüm başkanı / rektör yardımcıları kim?" → phone_directory(birim=..., gorev_icerir="dekan")
+  ile rehberin görev sütununa bak, birimin yönetim sayfasıyla (search) doğrula. search sonucundaki
+  `rehber_kayitlari` alanı da bu soruların cevabını içerebilir.
+- Bir akademisyen / hoca hakkında ("X kim?", yayınları, yayın sayısı, projeleri, tezleri, idari görevleri,
+  araştırma alanları) → academic_profile(ad=...). Gerekirse search(..., kaynak="unis").
+- KBÜ'de olan biten, haberler, etkinlikler, ziyaretler → search(..., kaynak="medya") ve latest_announcements.
+- Yemek menüsü → food_menu. Yemekhane ücretleri / fiyat listesi / çalışma saatleri → search (SKS belgeleri).
+- Akademik takvim / sınav-ders başlangıç tarihleri → academic_calendar.
+- Ders planı / müfredat, AKTS, haftalık ders saatleri, program kontenjanı, mezuniyet koşulları,
+  program çıktıları, kabul koşulları → search(..., kaynak="bologna").
+- Diğer her şey (yönetmelik, yönerge, başvuru, burs, harç, staj, Erasmus, kontenjan, ders programı,
+  sınav programı, formlar, birimler...) → search, ardından en ilgili sonucun tamamını read_document ile oku.
+
+BİRİM / KİŞİ AYRINTILARI
+- Bilgi bir bölüm/birim düzeyindeyse doğru birimin sitesinden geldiğinden emin ol
+  (ör. Bilgisayar Mühendisliği → bbf.karabuk.edu.tr/bilgisayar; Bilgisayar ve Bilişim Bilimleri Fakültesi).
+  Alt site sayfalarında BA parametresi bölümü gösterir (BA=bilgisayar, BA=yazilim ...).
+- Telefon rehberinde birimler fakülte düzeyindedir: aynı fakültede birden fazla "Bölüm Sekreteri" çıkarsa,
+  bölüm sitesindeki bölüm telefonunu rehberdeki dahili numarayla eşleştirerek doğru kişiyi belirle;
+  eşleşmezse adayların hepsini belirsizliği açıkça söyleyerek ver.
+- Giriş gerektiren sistemler (OBS, EBYS, e-posta vb.) ve kişisel öğrenci bilgileri kapsam dışıdır.
 """
 
 mcp = MCPServer(name="karabuk-universitesi", title="Karabük Üniversitesi", instructions=INSTRUCTIONS,
@@ -71,16 +86,19 @@ NO_INDEX = {
 
 RO = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True)
 
-_conn = None
+_local = threading.local()
 
 
 def conn():
-    global _conn
-    if _conn is None:
-        if not config.DB_PATH.exists():
-            raise RuntimeError(f"İndeks bulunamadı ({config.DB_PATH}). Önce `kbu crawl` çalıştırılmalı.")
-        _conn = db.connect(readonly=True)
-    return _conn
+    """İş parçacığı başına bir okuma bağlantısı (araçlar eşzamanlı çalışabilir)."""
+    c = getattr(_local, "conn", None)
+    if c is None or c.closed:
+        try:
+            c = db.connect(readonly=True)
+        except Exception as e:
+            raise RuntimeError(f"Veritabanına bağlanılamadı ({type(e).__name__}). PostgreSQL çalışıyor mu? `docker compose up -d db`") from e
+        _local.conn = c
+    return c
 
 
 def _stale(checked_at: str | None, hours: float) -> bool:
@@ -109,15 +127,18 @@ def search(
     unit: Annotated[str | None, Field(description="Birim/site filtresi (ör. 'bbf', 'bilgisayar', 'oidb', 'Tıp Fakültesi', 'sks')")] = None,
     file_type: Annotated[str | None, Field(description="'sayfa', 'pdf', 'word', 'excel', 'sunum' veya 'dosya' (tüm dosyalar)")] = None,
     since: Annotated[str | None, Field(description="Bu tarihten (YYYY-AA-GG) yeni belgeler")] = None,
+    kaynak: Annotated[str | None, Field(description="Kaynak filtresi: 'site' (birim siteleri ve dosyaları), 'unis' (akademisyen profilleri, yayınlar, projeler, tezler), 'medya' (KBÜ Medya haberleri, son 2 yıl), 'bologna' (ders planları/AKTS). Boş: hepsi")] = None,
     limit: Annotated[int, Field(ge=1, le=25)] = 8,
 ) -> dict:
-    """Karabük Üniversitesi sitelerindeki tüm sayfa ve dosyalarda (PDF, Word, Excel...) tam metin arama.
-    Sonuç parçalarını kesin bilgi için kullanmadan önce read_document ile belgenin tamamını oku."""
+    """Karabük Üniversitesi (KBÜ) hakkındaki HER soruda — kullanıcı "MCP kullan" demese bile — ilk başvurulacak araç.
+    Tüm KBÜ siteleri, PDF/Word/Excel dosyaları (taranmış belgeler OCR ile), UNIS akademisyen profilleri ve KBÜ Medya
+    haberlerinde hibrit arama (anahtar kelime + anlamsal). Sonuçlar ilgililiğe ve tarihe göre sıralıdır.
+    Kesin bilgi vermeden önce en ilgili sonucu read_document ile tamamen oku."""
     try:
         c = conn()
-    except RuntimeError:
-        return NO_INDEX
-    res = fts_search(c, query, unit=unit, kind=file_type, date_from=since, limit=limit)
+    except RuntimeError as e:
+        return {**NO_INDEX, "hata": str(e)}
+    res = fts_search(c, query, unit=unit, kind=file_type, date_from=since, limit=limit, source=kaynak)
     out = {"sorgu": query, "sonuc_sayisi": len(res), "sonuclar": res}
     if updater.lock_active() and not db.get_meta(c, "last_update_full") and not db.get_meta(c, "last_crawl_finished"):
         out["uyari"] = "İlk indeksleme sürüyor; sonuçlar eksik olabilir. Bulunamayan bilgi için fetch_page ile ilgili birim sitesine bakın."
@@ -147,11 +168,13 @@ async def read_document(
         return {"hata": "Sadece *.karabuk.edu.tr altındaki herkese açık adresler okunabilir."}
     row = None
     try:
-        row = conn().execute("SELECT * FROM docs WHERE url=? OR final_url=? ORDER BY status='ok' DESC LIMIT 1", (n, n)).fetchone()
+        row = conn().execute("SELECT * FROM docs WHERE url=? OR final_url=? ORDER BY status IN ('ok', 'recheck') DESC LIMIT 1", (n, n)).fetchone()
     except RuntimeError:
         pass
 
-    if row and row["status"] == "ok" and not force_live and not _stale(row["checked_at"], 24):
+    # UNIS profilleri kendi modülüyle derlenir (canlı sayfa yalnızca menü + boş şablon döner)
+    fresh_hours = 24 * 7 if row and row["source"] == "unis" else 24
+    if row and row["status"] in ("ok", "recheck") and (row["source"] == "unis" or (not force_live and not _stale(row["checked_at"], fresh_hours))):
         chunks = conn().execute("SELECT page, text FROM chunks WHERE doc_id=? ORDER BY ord", (row["id"],)).fetchall()
         sections = _merge_chunks(chunks)
         text, total, nxt = _sections_to_text(sections, offset, max_chars)
@@ -269,7 +292,7 @@ async def list_units(
     try:
         for r in conn().execute(
             """SELECT url, site_title FROM docs WHERE status='ok' AND kind='html' AND site_title IS NOT NULL
-               AND (url LIKE '%.karabuk.edu.tr/' OR url LIKE '%/index.aspx' OR url GLOB 'https://*.karabuk.edu.tr/[a-z]*' )
+               AND (url LIKE '%.karabuk.edu.tr/' OR url LIKE '%/index.aspx' OR url ~ '^https://[^/]+\.karabuk\.edu\.tr/[a-z]' )
                ORDER BY url"""):
             path = urls.urlsplit(r["url"]).path
             if path in ("/", "/index.aspx") or re.fullmatch(r"/[a-z]+/?", path):
@@ -401,6 +424,51 @@ async def fetch_page(
 
 
 @mcp.tool(annotations=RO)
+def academic_profile(
+    ad: Annotated[str, Field(description="Akademisyenin adı soyadı (unvansız da olur), ör. 'Hakan Kutucu', 'İsa Avcı'")],
+    max_chars: Annotated[int, Field(ge=2000, le=60000)] = 20000,
+) -> dict:
+    """Bir akademisyen / hoca hakkında her şey tek çağrıda: UNIS profili (unvan, birim, idari görevler, araştırma
+    alanları, atıf özetleri, TÜM yayınlar, projeler, tez danışmanlıkları, ödüller), telefon rehberi kaydı ve
+    KBÜ sitelerinde / KBÜ Medya'da adının geçtiği en yeni belgeler. "X hoca kim?", "X'in yayınları neler?",
+    "X'in kaç yayını var?" soruları için kullan."""
+    try:
+        c = conn()
+    except RuntimeError as e:
+        return {"hata": str(e)}
+    q = normalize_for_index(re.sub(r"(?i)\b(prof|doç|doc|dr|öğr|ogr|gör|gor|üyesi|uyesi|arş|ars|hoca(sı|m)?)\b\.?", " ", ad))
+    toks = [t for t in q.split() if len(t) > 1]
+    if not toks:
+        return {"hata": "Ad soyad verin."}
+    tsq = " & ".join(f"{t}:A" for t in toks)
+    rows = c.execute(
+        """SELECT DISTINCT d.id, d.url, d.title, d.checked_at FROM chunks ch JOIN docs d ON d.id = ch.doc_id
+           WHERE d.source = 'unis' AND d.status = 'ok' AND d.url LIKE '%/akademisyen-detay/%'
+             AND ch.tsv @@ to_tsquery('simple', ?) LIMIT 5""", (tsq,)).fetchall()
+    out: dict = {"aranan": ad}
+    profiles = []
+    for r in rows[:3]:
+        chunks = c.execute("SELECT page, text FROM chunks WHERE doc_id=? ORDER BY ord", (r["id"],)).fetchall()
+        text, total, _ = _sections_to_text(_merge_chunks(chunks), 0, max_chars // max(1, min(len(rows), 3)))
+        profiles.append({"baslik": r["title"], "url": r["url"], "son_kontrol": r["checked_at"], "metin": text,
+                         "kesildi": total > len(text)})
+    out["unis_profilleri"] = profiles or "UNIS'te bu adla akademisyen bulunamadı (adı farklı yazmayı deneyin)."
+    people = search_people(c, " ".join(toks), limit=5)
+    if people:
+        out["rehber"] = people
+    mentions = fts_search(c, " ".join(toks), limit=6, chunks_per_doc=1, semantic=False)
+    out["diger_kaynaklar"] = [{k: m[k] for k in ("baslik", "url", "kaynak", "tarih")} | {"parca": m["parcalar"][0]["metin"][:400]}
+                              for m in mentions if m["kaynak"] != "unis"][:5]
+    return out
+
+
+@mcp.prompt(name="kbu_asistan", title="KBÜ asistanı (sistem promptu)")
+def kbu_asistan() -> str:
+    """Karabük Üniversitesi sohbet asistanı için sistem promptu (kendi sohbet arayüzünüzde kullanın)."""
+    return INSTRUCTIONS
+
+
+@mcp.tool(annotations=RO)
 def index_status() -> dict:
     """Yerel indeksin durumu: belge/dosya sayıları, son güncellemeler, arka planda güncelleme çalışıyor mu."""
     out = {"surum": __version__, **updater.status()}
@@ -410,7 +478,10 @@ def index_status() -> dict:
         c = conn()
     except RuntimeError:
         return {**out, **NO_INDEX}
+    from .embed import status as embed_status
     out.update({
+        "kaynaklar": {r[0]: r[1] for r in c.execute("SELECT source, COUNT(*) FROM docs WHERE status='ok' GROUP BY source")},
+        "anlamsal_arama": embed_status(c),
         "belgeler": {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM docs WHERE status='ok' GROUP BY kind")},
         "parca_sayisi": c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
         "site_sayisi": c.execute("SELECT COUNT(DISTINCT host) FROM docs WHERE status='ok'").fetchone()[0],

@@ -8,7 +8,6 @@ Türkçe model (tur.traineddata) yoksa resmi tesseract-ocr/tessdata deposundan v
 import logging
 import os
 import shutil
-import sqlite3
 import time
 from pathlib import Path
 
@@ -139,21 +138,13 @@ def run_ocr(conn, limit: int | None = None, workers: int | None = None, heartbea
                 conn.commit()
                 log.warning("OCR başarısız (%d/%d) %s: %s", n, len(rows), r["url"], ex if isinstance(ex, str) else "metin yok")
                 continue
-            for attempt in range(10):  # aynı anda çalışan tarayıcı kısa süreli kilit tutabilir
-                try:
-                    store(conn, doc_id, r["final_url"] or r["url"], ex, r["anchor_text"])
-                    conn.execute(
-                        "UPDATE docs SET needs_ocr=2, text_len=?, pages=?, content_hash=?, title=COALESCE(title, ?), "
-                        "content_date=COALESCE(content_date, ?), checked_at=? WHERE id=?",
-                        (len(ex.text), ex.pages, content_hash(ex.text), ex.title, ex.content_date, now_iso(), doc_id),
-                    )
-                    conn.commit()
-                    break
-                except sqlite3.OperationalError as e:
-                    conn.rollback()
-                    if "locked" not in str(e) or attempt == 9:
-                        raise
-                    time.sleep(15)
+            store(conn, doc_id, r["final_url"] or r["url"], ex, r["anchor_text"])
+            conn.execute(
+                "UPDATE docs SET needs_ocr=2, text_len=?, pages=?, content_hash=?, title=COALESCE(title, ?), "
+                "content_date=COALESCE(content_date, ?), checked_at=? WHERE id=?",
+                (len(ex.text), ex.pages, content_hash(ex.text), ex.title, ex.content_date, now_iso(), doc_id),
+            )
+            conn.commit()
             stats["basarili"] += 1
             if heartbeat:
                 heartbeat()

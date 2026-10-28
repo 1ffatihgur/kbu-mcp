@@ -1,7 +1,7 @@
 from kbu_mcp import urls
 from kbu_mcp.extract import extract_html, find_date
 from kbu_mcp.indexer import body_for_index, split_text
-from kbu_mcp.textnorm import build_fts_query, fold, normalize_for_index
+from kbu_mcp.textnorm import build_fts_query, fold, normalize_for_index  # noqa: F401
 from kbu_mcp.units import unit_label
 
 
@@ -72,3 +72,46 @@ def test_split_text_respects_size():
     parts = split_text(text, size=800, overlap=100)
     assert len(parts) > 5 and all(len(p) <= 900 for p in parts)
     assert normalize_for_index(parts[0]).startswith("paragraf 0")
+
+
+# ---------------------------------------------------------------- v2: tsquery, BM25F, Markdown
+
+def test_tsquery_prefix_and_synonyms():
+    from kbu_mcp.textnorm import build_tsquery
+
+    q = build_tsquery("bilgisayar mühendisliği bölüm telefonu")
+    assert "muhendisli:*" in q and "(telefo:* | tel:*" in q and " & " in q
+    assert " | " in build_tsquery("yemek ücreti", "or")
+
+
+def test_bm25f_prefers_title_and_saturates():
+    from kbu_mcp.search import _bm25f
+
+    groups = [["bilgisayar*"], ["sekreter*"]]
+    title_hit = _bm25f(groups, [3.0, 3.8], (["bilgisayar", "muhendisligi"], [], ["bolum", "sekreteri"]))
+    body_only = _bm25f(groups, [3.0, 3.8], ([], [], ["bilgisayar", "bolum", "sekreteri"]))
+    assert title_hit > body_only
+    many = _bm25f(groups, [3.0, 3.8], ([], [], ["bilgisayar"] * 20 + ["sekreteri"]))
+    assert many < body_only * 2.5  # tekrar doygun
+
+
+def test_markdown_tables_headings_lists():
+    html = """<html><head><title>Site</title></head><body><div id="txtIcerik">
+      <h2>Ücret Tarifesi</h2><ul><li>Öğrenci</li><li>Personel</li></ul>
+      <table><tr><th>Öğün</th><th>Ücret</th></tr><tr><td>Öğle</td><td>40 TL</td></tr></table>
+    </div><footer>Tüm Hakları Saklıdır</footer></body></html>"""
+    ex = extract_html(html, "https://sks.karabuk.edu.tr/icerikGoster.aspx?id=1")
+    assert "## Ücret Tarifesi" in ex.text
+    assert "- Öğrenci" in ex.text
+    assert "| Öğün | Ücret |" in ex.text and "| Öğle | 40 TL |" in ex.text
+    assert "Hakları" not in ex.text
+
+
+def test_medya_comma_date():
+    assert find_date("25 Şubat, 2025") == "2025-02-25"
+
+
+def test_unis_cell_text_joins_authors_and_counts():
+    from kbu_mcp.unis import _cell_text
+
+    assert _cell_text("<b>A</b>, <i>B</i><span>2026</span><span>282</span><span>Yayın</span>") == ["A, B", "2026", "282 Yayın"]

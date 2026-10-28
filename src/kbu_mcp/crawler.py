@@ -11,7 +11,7 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import httpx
@@ -24,8 +24,8 @@ from .indexer import content_hash, store
 log = logging.getLogger("kbu.crawler")
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+def now_iso(delta_hours: float = 0) -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=delta_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def decode_html(resp: httpx.Response, data: bytes) -> str:
@@ -74,8 +74,12 @@ def last_modified_date(value: str | None) -> str | None:
 
 class Crawler:
     def __init__(self, conn, max_pages: int | None = None, max_depth: int = config.MAX_DEPTH,
-                 max_postback: int = config.MAX_POSTBACK_PAGES, heartbeat=None):
+                 max_postback: int = config.MAX_POSTBACK_PAGES, heartbeat=None, only_hosts: list[str] | None = None):
         self.conn = conn
+        self.only_hosts = only_hosts
+        # Genel hız sınırı: tüm sitelere toplam saatlik istek (config.CRAWL_MAX_PER_HOUR)
+        self.min_interval = 3600 / config.CRAWL_MAX_PER_HOUR if config.CRAWL_MAX_PER_HOUR > 0 else 0.0
+        self.next_slot = 0.0
         self.heartbeat = heartbeat
         self.max_pages = max_pages
         self.max_postback = max_postback
@@ -122,8 +126,9 @@ class Crawler:
         if self.host_count[host] >= config.MAX_PAGES_PER_HOST:
             return
         self.conn.execute(
-            "INSERT OR IGNORE INTO docs(url, host, kind, depth, parent_url, anchor_text) VALUES(?,?,?,?,?,?)",
-            (url, host, urls.kind_from_url(url), depth, parent, anchor),
+            "INSERT INTO docs(url, host, source, kind, depth, parent_url, anchor_text) VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT DO NOTHING",
+            (url, host, db.source_for(host, url), urls.kind_from_url(url), depth, parent, anchor),
         )
         self.host_count[host] += 1
 
@@ -141,8 +146,12 @@ class Crawler:
 
     def mark_recheck(self, older_than_hours: float, hot_only: bool = False) -> int:
         """Eski kontrol edilmiş belgeleri yeniden kontrol kuyruğuna alır."""
-        cond = "status IN ('ok','duplicate') AND (checked_at IS NULL OR checked_at < datetime('now', ?))"
-        params = [f"-{older_than_hours} hours"]
+        # UNIS kendi modülüyle (unis.py) güncellenir
+        cond = "status IN ('ok','duplicate') AND source <> 'unis' AND (checked_at IS NULL OR checked_at < ?)"
+        params: list = [now_iso(-older_than_hours)]
+        if self.only_hosts:
+            cond += " AND host = ANY(?)"
+            params.append(list(self.only_hosts))
         if hot_only:
             # Ana sayfalar, bölüm ana sayfaları (/bilgisayar) ve duyuru/etkinlik/haber listeleri:
             # yeni içeriğin linkleri buralarda çıkar, link takibiyle yeni sayfalar da taranır.
@@ -153,18 +162,23 @@ class Crawler:
             return len(ids)
         cur = self.conn.execute(f"UPDATE docs SET status='recheck' WHERE {cond}", params)
         # Hata alanları da bir şans daha (3 başarısızlıktan sonra bırakılır)
-        self.conn.execute("UPDATE docs SET status='recheck' WHERE status='error' AND fail_count < 3")
+        self.conn.execute(f"UPDATE docs SET status='recheck' WHERE status='error' AND fail_count < 3"
+                          f"{' AND host = ANY(?)' if self.only_hosts else ''}", params[1:])
         self.conn.commit()
         return cur.rowcount
 
     def _load_batch(self, per_host: int = 40) -> dict[str, deque]:
         # Host başına sınırlı sayıda iş: kuyruğun tek bir siteye yığılıp diğerlerini bekletmesini önler.
+        host_cond, params = "", []
+        if self.only_hosts:
+            host_cond = " AND host = ANY(?)"
+            params.append(list(self.only_hosts))
         rows = self.conn.execute(
-            """SELECT * FROM (
+            f"""SELECT * FROM (
                    SELECT *, ROW_NUMBER() OVER (PARTITION BY host ORDER BY depth, (kind IS NOT NULL), id) AS rn
-                   FROM docs WHERE status IN ('queued','recheck')
-               ) WHERE rn <= ? ORDER BY depth, id""",
-            (per_host,),
+                   FROM docs WHERE status IN ('queued','recheck') AND source <> 'unis'{host_cond}
+               ) t WHERE rn <= ? ORDER BY depth, id""",
+            (*params, per_host),
         ).fetchall()
         by_host: dict[str, deque] = defaultdict(deque)
         for r in rows:
@@ -240,6 +254,12 @@ class Crawler:
     # ------------------------------------------------------------ tek belge
 
     async def _polite_wait(self, host: str) -> None:
+        if self.min_interval:
+            now = time.time()
+            slot = max(now, self.next_slot)
+            self.next_slot = slot + self.min_interval
+            if slot > now:
+                await asyncio.sleep(slot - now)
         wait = self.host_last[host] + config.PER_HOST_DELAY - time.time()
         self.host_last[host] = max(time.time(), self.host_last[host] + config.PER_HOST_DELAY)
         if wait > 0:
@@ -274,13 +294,14 @@ class Crawler:
         # Bazı sayfalar (ör. Duyuru_tum.aspx) Referer yoksa ana sayfaya yönlendiriyor.
         parent = doc.get("parent_url")
         headers = {"Referer": parent if parent and urls.host_of(parent) == host else referer_for(url)}
-        if doc["status"] == "recheck":
+        if doc["status"] == "recheck" and (doc.get("parser") or 0) >= config.PARSER_VERSION:
             if doc.get("etag"):
                 headers["If-None-Match"] = doc["etag"]
             if doc.get("last_modified"):
                 headers["If-Modified-Since"] = doc["last_modified"]
         if self.host_dead.get(host, 0) >= 5:
-            self._set(doc["id"], status="error", error="host ulaşılamıyor", fail_count=3, checked_at=now_iso())
+            # Önceden indekslenmiş içerik silinmez: site geçici olarak kapalı olabilir.
+            self._fail(doc, None, "host ulaşılamıyor")
             self.processed += 1
             return
         try:
@@ -295,7 +316,7 @@ class Crawler:
         self.host_dead[host] = 0
 
         status = resp.status_code
-        if status == 304:
+        if status == 304 and doc.get("content_hash"):
             self.conn.execute("UPDATE docs SET status='ok', checked_at=?, fail_count=0 WHERE id=?", (now_iso(), doc["id"]))
             self.stats["not_modified"] += 1
             self.pending_commit += 1
@@ -344,6 +365,15 @@ class Crawler:
             except Exception as e:
                 log.debug("postback hatası %s: %r", url, e)
 
+        # KBÜ Medya: yalnızca son N gün (varsayılan 2 yıl) haberleri indekslenir
+        if (host == config.MEDYA_HOST and kind == "html" and ex.content_date
+                and ex.content_date < (datetime.now() - timedelta(days=config.MEDYA_MAX_AGE_DAYS)).date().isoformat()):
+            db.delete_chunks(self.conn, doc["id"])
+            self._set(doc["id"], status="skipped", http_status=status, final_url=final_url, kind=kind,
+                      content_date=ex.content_date, title=ex.title, error="eski haber (KBU_MEDYA_MAX_AGE_DAYS)",
+                      parser=config.PARSER_VERSION, checked_at=now_iso())
+            return
+
         h = content_hash(ex.text) if ex.text else None
         etag = resp.headers.get("etag")
         lm = resp.headers.get("last-modified")
@@ -352,10 +382,10 @@ class Crawler:
         fields = dict(
             final_url=final_url, kind=kind, http_status=status, etag=etag, last_modified=lm,
             site_title=ex.site_title, title=ex.title, content_hash=h, content_date=cdate,
-            text_len=len(ex.text), pages=ex.pages, needs_ocr=int(ex.needs_ocr), error=None,
+            text_len=len(ex.text), pages=ex.pages, needs_ocr=int(ex.needs_ocr), error=None, parser=config.PARSER_VERSION,
             fail_count=0, fetched_at=now_iso(), checked_at=now_iso(),
         )
-        if h and doc.get("content_hash") == h and doc["status"] == "recheck":
+        if h and doc.get("content_hash") == h and doc["status"] == "recheck" and (doc.get("parser") or 0) >= config.PARSER_VERSION:
             self._set(doc["id"], status="ok", **fields)  # değişmemiş; parçalar zaten güncel
             self.stats["unchanged"] += 1
             return
@@ -418,17 +448,21 @@ class Crawler:
         if gone and was_ok and fails >= 2:
             status = "removed"
             db.delete_chunks(self.conn, doc["id"])
-        elif was_ok and not permanent and fails < 3:
-            status = "ok"  # geçici hata: eski içerik kalsın, sonra tekrar denenir
+        elif was_ok and not gone:
+            # Geçici hata (bağlantı, zaman aşımı, 5xx, çıkarma): indekslenmiş içerik aramada kalsın.
+            # (v1'de 3 hatadan sonra belge aramadan düşüyordu — "Yemekhane Fiyat Listesi" böyle kayboldu.)
+            status = "ok"
         else:
             status = "error"
         self._set(doc["id"], status=status, http_status=http_status, error=error, fail_count=fails, checked_at=now_iso())
         self.stats["errors"] += 1
 
 
-async def crawl(conn, seeds=None, max_pages=None, recheck_hours=None, hot_only=False, heartbeat=None) -> dict:
+async def crawl(conn, seeds=None, max_pages=None, recheck_hours=None, hot_only=False, heartbeat=None,
+                only_hosts=None) -> dict:
     # Saatlik (hot) modda arşiv sayfalamasının sadece en yeni sayfaları gezilir.
-    c = Crawler(conn, max_pages=max_pages, max_postback=2 if hot_only else config.MAX_POSTBACK_PAGES, heartbeat=heartbeat)
+    c = Crawler(conn, max_pages=max_pages, max_postback=2 if hot_only else config.MAX_POSTBACK_PAGES, heartbeat=heartbeat,
+                only_hosts=only_hosts)
     c.seed(seeds or config.SEED_URLS)
     if recheck_hours is not None:
         n = c.mark_recheck(recheck_hours, hot_only=hot_only)

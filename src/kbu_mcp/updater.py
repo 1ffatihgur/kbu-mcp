@@ -70,8 +70,6 @@ def _hours_since(value: str | None) -> float:
 
 def needed_mode() -> str | None:
     """'full', 'hot' veya None (güncel)."""
-    if not config.DB_PATH.exists():
-        return "full"
     try:
         conn = db.connect(readonly=True)
         ok = conn.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0]
@@ -88,40 +86,66 @@ def needed_mode() -> str | None:
     return None
 
 
-def run_update(hot: bool = False) -> dict:
-    """Kilit altında güncelleme yapar ve özet döner."""
+UNIS_REFRESH_HOURS = 72
+
+
+def run_update(hot: bool = False, conn=None) -> dict:
+    """Güncelleme yapar ve özet döner. conn verilmezse kilidi kendisi alır (işçi kilidi zaten tutar)."""
+    if conn is None:
+        with update_lock():
+            c = db.connect()
+            try:
+                return run_update(hot, conn=c)
+            finally:
+                c.close()
+    return _update(conn, hot)
+
+
+def _update(conn, hot: bool) -> dict:
     from .crawler import crawl, now_iso
     from .people import refresh_people
 
-    with update_lock():
-        conn = db.connect()
-        db.init(conn)
-        fresh = conn.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0] < 100
-        summary: dict = {"mod": "ilk tarama" if fresh else ("saatlik" if hot else "tam yenileme")}
-        if fresh:
-            summary["tarama"] = asyncio.run(crawl(conn, heartbeat=heartbeat))
-        else:
-            summary["tarama"] = asyncio.run(crawl(conn, recheck_hours=0.9 if hot else 24, hot_only=hot, heartbeat=heartbeat))
-        if not hot:
-            if _hours_since(db.get_meta(conn, "people_refreshed")) >= 20:
-                try:
-                    summary["rehber"] = asyncio.run(refresh_people(conn))
-                except Exception as e:
-                    summary["rehber_hata"] = repr(e)
-            heartbeat()
+    db.init(conn)
+    fresh = conn.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0] < 100
+    summary: dict = {"mod": "ilk tarama" if fresh else ("saatlik" if hot else "tam yenileme")}
+    if fresh:
+        summary["tarama"] = asyncio.run(crawl(conn, heartbeat=heartbeat))
+    else:
+        summary["tarama"] = asyncio.run(crawl(conn, recheck_hours=0.9 if hot else 24, hot_only=hot, heartbeat=heartbeat))
+    if not hot:
+        if _hours_since(db.get_meta(conn, "people_refreshed")) >= 20:
             try:
-                from .ocr import find_tessdata, run_ocr
-                if find_tessdata(auto_download=True):
-                    summary["ocr"] = run_ocr(conn, heartbeat=heartbeat)
-                else:
-                    summary["ocr"] = "Tesseract bulunamadı; taranmış PDF'ler atlandı"
+                summary["rehber"] = asyncio.run(refresh_people(conn))
             except Exception as e:
-                summary["ocr_hata"] = repr(e)
-            db.set_meta(conn, "last_update_full", now_iso())
-        db.set_meta(conn, "last_update_hot", now_iso())
-        conn.commit()
-        conn.close()
-        return summary
+                summary["rehber_hata"] = repr(e)
+        heartbeat()
+        try:
+            from .ocr import find_tessdata, run_ocr
+            if find_tessdata(auto_download=True):
+                summary["ocr"] = run_ocr(conn, heartbeat=heartbeat)
+            else:
+                summary["ocr"] = "Tesseract bulunamadı; taranmış PDF'ler atlandı"
+        except Exception as e:
+            conn.rollback()
+            summary["ocr_hata"] = repr(e)
+        if _hours_since(db.get_meta(conn, "unis_refreshed")) >= UNIS_REFRESH_HOURS:
+            try:
+                from .unis import refresh_unis
+                summary["unis"] = asyncio.run(refresh_unis(conn, heartbeat=heartbeat))
+            except Exception as e:
+                conn.rollback()
+                summary["unis_hata"] = repr(e)
+        db.set_meta(conn, "last_update_full", now_iso())
+    # Yeni / değişen parçaların embedding'leri (servis yoksa atlanır; arama anahtar kelimeyle sürer)
+    try:
+        from .embed import run_embed
+        summary["embedding"] = run_embed(conn, heartbeat=heartbeat)
+    except Exception as e:
+        conn.rollback()
+        summary["embedding_hata"] = repr(e)
+    db.set_meta(conn, "last_update_hot", now_iso())
+    conn.commit()
+    return summary
 
 
 def _python_exe() -> str:
@@ -186,15 +210,14 @@ def maybe_auto_update() -> str | None:
 
 def status() -> dict:
     out = {"veri_klasoru": str(config.DATA_DIR), "guncelleme_calisiyor": lock_active()}
-    if config.DB_PATH.exists():
-        try:
-            conn = db.connect(readonly=True)
-            out["son_tam_guncelleme"] = db.get_meta(conn, "last_update_full") or db.get_meta(conn, "last_crawl_finished")
-            out["son_saatlik_guncelleme"] = db.get_meta(conn, "last_update_hot")
-            out["kuyruk"] = conn.execute("SELECT COUNT(*) FROM docs WHERE status IN ('queued','recheck')").fetchone()[0]
-            conn.close()
-        except Exception:
-            pass
+    try:
+        conn = db.connect(readonly=True)
+        out["son_tam_guncelleme"] = db.get_meta(conn, "last_update_full") or db.get_meta(conn, "last_crawl_finished")
+        out["son_saatlik_guncelleme"] = db.get_meta(conn, "last_update_hot")
+        out["kuyruk"] = conn.execute("SELECT COUNT(*) FROM docs WHERE status IN ('queued','recheck')").fetchone()[0]
+        conn.close()
+    except Exception:
+        pass
     return out
 
 

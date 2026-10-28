@@ -18,6 +18,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--keyword-only", action="store_true", help="Anlamsal aramayı kapat (karşılaştırma için)")
     args = ap.parse_args()
 
     questions = json.loads((Path(__file__).parent / "questions.json").read_text(encoding="utf-8"))
@@ -26,7 +27,7 @@ def main() -> None:
     for q in questions:
         if q.get("tool", "search") != "search":
             continue
-        res = search(conn, q["query"], unit=q.get("unit"), limit=args.k, chunks_per_doc=3)
+        res = search(conn, q["query"], unit=q.get("unit"), limit=args.k, chunks_per_doc=3, semantic=not args.keyword_only)
         expect = normalize_for_index(q["expect"])
         rank = None
         for i, r in enumerate(res, start=1):

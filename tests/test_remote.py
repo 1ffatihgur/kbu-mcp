@@ -42,3 +42,26 @@ def test_rate_limit_blocks_after_limit():
 
     asyncio.run(run())
     assert sent == [200, 200, 200, 429, 429, 200]
+
+
+def test_auth_middleware_requires_key():
+    from kbu_mcp.remote import AuthMiddleware
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def call(path, headers=(), qs=b""):
+        sent = []
+
+        async def send(m):
+            sent.append(m)
+
+        await AuthMiddleware(app, {"gizli"})({"type": "http", "path": path, "headers": list(headers), "query_string": qs},
+                                             None, send)
+        return sent[0]["status"]
+
+    assert asyncio.run(call("/mcp")) == 401
+    assert asyncio.run(call("/mcp", [(b"authorization", b"Bearer gizli")])) == 200
+    assert asyncio.run(call("/mcp", qs=b"key=gizli")) == 200
+    assert asyncio.run(call("/mcp", [(b"x-api-key", b"yanlis")])) == 401
+    assert asyncio.run(call("/health")) == 200

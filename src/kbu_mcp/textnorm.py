@@ -1,4 +1,4 @@
-"""Türkçe metin normalizasyonu ve FTS5 sorgu üretimi.
+"""Türkçe metin normalizasyonu ve tam metin sorgu (tsquery) üretimi.
 
 İndekse yazılan metin ve sorgular aynı şekilde normalize edilir:
 Türkçe kurallarıyla küçük harf (İ→i, I→ı), ardından aksan katlama
@@ -47,7 +47,11 @@ SYNONYMS = {
     "yemekhane": ["yemek", "menü"],
     "yurt": ["yurt", "barınma"],
     "harç": ["harç", "ücret"],
-    "ücret": ["harç", "ücret"],
+    "ücret": ["harç", "fiyat", "tarife"],
+    "ücretleri": ["harç", "fiyat", "tarife"],
+    "fiyat": ["ücret", "tarife"],
+    "fiyatları": ["ücret", "tarife"],
+    "çalışma": ["servis", "hizmet", "açık"],
     "staj": ["staj", "işletmede"],
     "çap": ["çift", "anadal"],
     "erasmus": ["erasmus", "hareketlilik"],
@@ -130,6 +134,23 @@ def build_fts_query(query: str, mode: str = "and") -> str | None:
     parts = ["(" + " OR ".join(g) + ")" if len(g) > 1 else g[0] for g in groups]
     joiner = " AND " if mode == "and" else " OR "
     return joiner.join(parts)
+
+
+def _ts(term: str) -> str:
+    """FTS5 biçimli terimi tsquery'ye çevirir: muhendisli* → muhendisli:*, "ders programi" → ders <-> programi."""
+    if term.endswith("*"):
+        return term[:-1] + ":*"
+    ws = term.strip('"').split()
+    return ws[0] if len(ws) == 1 else "(" + " <-> ".join(ws) + ")"
+
+
+def build_tsquery(query: str, mode: str = "and") -> str | None:
+    """PostgreSQL to_tsquery('simple', ...) ifadesi. mode='and': tüm kelime grupları; 'or': herhangi biri."""
+    groups = query_terms(query)
+    if not groups:
+        return None
+    parts = ["(" + " | ".join(_ts(t) for t in g) + ")" if len(g) > 1 else _ts(g[0]) for g in groups]
+    return (" & " if mode == "and" else " | ").join(parts)
 
 
 def phrase_query(query: str) -> str | None:
