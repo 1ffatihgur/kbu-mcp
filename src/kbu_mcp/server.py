@@ -197,6 +197,13 @@ async def read_document(
         return {"hata": f"Sayfa şu an erişilemiyor (HTTP {status}). Bağlantı kırık veya içerik kaldırılmış olabilir.", "url": final}
     if ex is None:
         return {"hata": f"Bu dosya türü okunamıyor ({kind}).", "url": final}
+    if row and row["status"] in ("ok", "recheck") and row["needs_ocr"] == 2 and len(ex.text.strip()) < 200:
+        # Taranmış belge: canlı okumada OCR yapılmaz (yavaş); indeksteki OCR metni kullanılır
+        chunks = conn().execute("SELECT page, text FROM chunks WHERE doc_id=? ORDER BY ord", (row["id"],)).fetchall()
+        text, total, nxt = _sections_to_text(_merge_chunks(chunks), offset, max_chars)
+        return _doc_result(row["final_url"] or n, row["title"] or row["anchor_text"], row["kind"], row["content_date"],
+                           f"indeks, OCR ile okunmuş metin (canlı dosya {now_iso()} UTC'de kontrol edildi)",
+                           text, total, nxt, row["pages"], row["needs_ocr"])
     text, total, nxt = _sections_to_text(ex.sections or [(None, ex.text)], offset, max_chars)
     date = ex.content_date
     if lm and kind != "html":
@@ -456,9 +463,13 @@ def academic_profile(
     people = search_people(c, " ".join(toks), limit=5)
     if people:
         out["rehber"] = people
-    mentions = fts_search(c, " ".join(toks), limit=6, chunks_per_doc=1, semantic=False)
+    mentions = fts_search(c, " ".join(toks), limit=12, chunks_per_doc=1, semantic=False)
+    def has_name(m):  # yalnızca adın tamamının geçtiği belgeler (başka "İsmail"ler değil)
+        blob = normalize_for_index(m["baslik"] or "") + " " + normalize_for_index(m["parcalar"][0]["metin"])
+        return all(re.search(rf"{t}", blob) for t in toks)
+
     out["diger_kaynaklar"] = [{k: m[k] for k in ("baslik", "url", "kaynak", "tarih")} | {"parca": m["parcalar"][0]["metin"][:400]}
-                              for m in mentions if m["kaynak"] != "unis"][:5]
+                              for m in mentions if m["kaynak"] != "unis" and has_name(m)][:5]
     return out
 
 

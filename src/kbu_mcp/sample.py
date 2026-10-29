@@ -21,9 +21,9 @@ from .indexer import split_text
 DEFAULT_SITE_URLS = [
     "https://www.karabuk.edu.tr/",
     "https://bbf.karabuk.edu.tr/bilgisayar/",
-    "https://sks.karabuk.edu.tr/",
+    "https://sks.karabuk.edu.tr/icerikGoster.aspx?BA=index.aspx&K=S&id=76",  # Beslenme Hizmetleri (yemek saatleri)
     "https://oidb.karabuk.edu.tr/",
-    "https://www.karabuk.edu.tr/yonetim/rektor.aspx",
+    "https://www.karabuk.edu.tr/1-54-Sayfa-Rektor-Yardimcilari",
 ]
 # Menü / üst bilgi / alt bilgi sızdığını gösteren kalıplar
 LEAK_RE = re.compile(r"Tüm Hakları Saklıdır|Copyright|Sosyal Medya|Linki Kopyala|Okunma Sayısı|Anasayfa\s*\n|"

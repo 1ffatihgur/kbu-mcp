@@ -90,7 +90,8 @@ def run_embed(conn, limit: int | None = None, heartbeat=None) -> dict:
     if done:  # ilk dolumdan sonra kurulur; sonraki eklemeler indekse kendiliğinden girer
         ac = db.connect(readonly=True)
         try:
-            ac.execute("SET maintenance_work_mem = '1GB'")
+            ac.execute("SET maintenance_work_mem = '512MB'")  # 1GB + paralel işçiler Docker'da belleği aşıp sunucuyu düşürdü
+            ac.execute("SET max_parallel_maintenance_workers = 1")
             ac.execute(db.VECTOR_INDEX)
         finally:
             ac.close()

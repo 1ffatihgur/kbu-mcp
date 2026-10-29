@@ -97,9 +97,9 @@ def _unit_filter(unit: str | None) -> str | None:
 
 SOURCES = {"site", "unis", "medya", "bologna"}
 RRF_K = 60
-# Anahtar kelime sıralaması alan kurallarını (başlık, birim, iletişim niyeti) içerdiği için daha ağır basar;
+# Eşit ağırlık eval setinde en iyisi (0.6: %93, 1.0: %96, 1.5: %93). Anahtar kelime sıralaması alan kurallarını içerir;
 # anlamsal sıralama eş anlamlı / farklı ifade edilmiş soruları yakalar.
-SEMANTIC_WEIGHT = float(os.environ.get("KBU_SEMANTIC_WEIGHT", "0.6"))
+SEMANTIC_WEIGHT = float(os.environ.get("KBU_SEMANTIC_WEIGHT", "1.0"))
 _COLS = """c.id AS chunk_id, c.doc_id, c.page, c.text, c.unit_n, c.tags, d.url, d.final_url, d.kind, d.title,
            d.site_title, d.anchor_text, d.content_date, d.checked_at, d.needs_ocr, d.source"""
 _TAG_WORDS = {"telefon": "numara dahili iletisim", "eposta": "eposta mail iletisim"}

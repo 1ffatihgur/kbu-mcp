@@ -82,7 +82,7 @@ BOILERPLATE_SELECTORS = [
     "#duyuruPage", "#duyuruModal", "#myModal", "#popupClass", ".modal", "#footerGrup",
     "#footer-widgets", ".footer-widgets", ".skip-link", ".screen-reader-text", ".breadcrumb",
     "footer", "[id*=footer]", "[class*=footer]", "body > header", "#header", "#masthead", ".site-header", ".navbar",
-    ".top-menu", "#menu", ".topbar", "#topbar", ".header-top", ".sharing", ".share-icons", ".tc-next-prev-post", ".tc-next-prev-post-slider", "#copyUrlButton",
+    ".top-menu", "#menu", ".dropdown-menu", ".mega-menu", ".topbar", "#topbar", ".header-top", ".sharing", ".share-icons", ".tc-next-prev-post", ".tc-next-prev-post-slider", "#copyUrlButton",
     ".layout-navbar", ".layout-menu", ".content-footer", ".footer",
 ]
 # Yayın tarihinin bulunduğu alanlar (içerik metninde tarih geçmeyen haber sayfaları için)
@@ -170,6 +170,8 @@ def extract_html(html: str, url: str) -> Extracted:
     for sel in FOOTER_CONTACT_SELECTORS:
         n = tree.css_first(sel)
         if n:
+            for s in n.css(".social-media, .social, .sosyal-medya"):
+                s.decompose()
             txt = clean_text(n.text(separator="\n"))
             if re.search(r"tel|telefon|e-?posta|adres", txt, re.I) and len(txt) < 1500:
                 footer_contact = txt
@@ -214,8 +216,9 @@ def extract_html(html: str, url: str) -> Extracted:
 
     ex.text = clean_text(text)
     if not ex.title:
-        first = ex.text.split("\n", 1)[0].strip()
-        ex.title = first[:150] if first else ex.site_title
+        first = ex.text.split("\n", 1)[0].strip().lstrip("#").strip()
+        # Ana sayfaların ilk satırı genelde bir bölüm başlığıdır ("Duyurular", slayt metni): site adı daha doğru
+        ex.title = (ex.site_title if is_home and ex.site_title else first[:150]) or ex.site_title
     ex.sections = [(None, ex.text)]
     ex.content_date = page_date or find_date(ex.text)
     return ex

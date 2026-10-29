@@ -68,7 +68,7 @@ async def _grid(client: httpx.AsyncClient, url: str, start: int) -> dict:
             if attempt == 3:
                 raise
             log.debug("UNIS ızgara hatası (%s), tekrar: %s", url, e)
-            await asyncio.sleep(3 * (attempt + 1))
+            await asyncio.sleep(5 * (attempt + 1))
     return {}
 
 
@@ -179,7 +179,14 @@ async def refresh_unis(conn, limit: int | None = None, users: list[str] | None =
         async def fetch(person):
             url = f"{BASE}akademisyen-detay/{person['kullanici']}"
             async with sem:
-                r = await client.get(url, headers={"Referer": BASE})
+                for attempt in range(4):  # geçici ağ / DNS hataları
+                    try:
+                        r = await client.get(url, headers={"Referer": BASE})
+                        break
+                    except httpx.TransportError:
+                        if attempt == 3:
+                            raise
+                        await asyncio.sleep(5 * (attempt + 1))
                 summary = profile_summary(r.text) if r.status_code == 200 else ""
                 await asyncio.sleep(DELAY)
                 items = await works(client, person["kullanici"])

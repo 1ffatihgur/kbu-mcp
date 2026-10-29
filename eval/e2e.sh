@@ -15,5 +15,5 @@ while IFS= read -r q; do
   timeout 400 claude -p "$q" --mcp-config "$cfg" --strict-mcp-config \
     --allowedTools "mcp__karabuk-universitesi__*" --output-format text < /dev/null >> "$out" 2>&1
   printf '\n\n---\n\n' >> "$out"
-done < eval/e2e_questions.txt
+done < "${QFILE:-eval/e2e_questions.txt}"
 rm -f "$cfg"

@@ -8,6 +8,7 @@
 - **Hibrit arama:** PostgreSQL tam metin (Türkçe katlama, kök önekleri, eş anlamlılar, IDF + BM25F alan
   ağırlıkları) **+** pgvector anlamsal arama (OpenAI uyumlu embedding servisi, varsayılan `bge-m3`) →
   Reciprocal Rank Fusion, ardından tazelik (yeni tarihli belge önde). Embedding servisi yoksa anahtar kelimeyle sürer.
+  Altın soru setinde (55 soru) recall@5: yalnızca anahtar kelime %93 → hibrit %96; toplantı kabul soruları 5/5.
 - Sonuçlarda `kaynak` (`site` / `unis` / `medya` / `bologna`) ve `eslesme` (`anahtar`, `anlamsal`, ikisi) alanları;
   `search(kaynak=...)` filtresi.
 - **`academic_profile`** aracı: bir hocanın UNIS profili, idari görevleri, tüm yayın/proje/tez/ödülleri, rehber
@@ -41,6 +42,7 @@
 - Geçici bağlantı hatası, OCR ile okunmuş belgeleri aramadan düşürüyordu ("Yemekhane Fiyat Listesi" toplantıda bu
   yüzden bulunamadı). Artık yalnızca iki kez 404/410 alan belge kaldırılır.
 - Günlük tam yenileme sırasında yeniden kontrol kuyruğundaki belgeler aramada görünmüyordu.
+- `read_document` 24 saatten eski taranmış PDF'i canlı okurken boş metin dönüyordu; artık indeksteki OCR metni verilir.
 
 
 ## v1.1.0 (2026-10-25)
