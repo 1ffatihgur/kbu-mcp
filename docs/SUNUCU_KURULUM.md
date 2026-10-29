@@ -21,9 +21,9 @@ anlatır. Sunucuya internetten paket / model indirmek gerekmez; her şey hazır 
 git clone https://github.com/1ffatihgur/kbu-mcp.git && cd kbu-mcp
 docker compose build
 docker pull pgvector/pgvector:pg17
-docker save kbu-mcp:2 pgvector/pgvector:pg17 | gzip > kbu-mcp-images.tar.gz        # ~0,6 GB
+docker save kbu-mcp:2 pgvector/pgvector:pg17 | gzip > kbu-mcp-images.tar.gz        # ~0,4 GB
 # Hazır indeksle başlamak için (tam taramayı beklemeden):
-docker compose exec db pg_dump -U kbu -Fc kbu > kbu-index.dump                       # ~3 GB
+docker compose exec db pg_dump -U kbu -Fc kbu > kbu-index.dump                       # ~1,8 GB
 ```
 
 Sunucuya kopyalanacaklar: depo klasörü (`kbu-mcp/`), `kbu-mcp-images.tar.gz`, isteğe bağlı `kbu-index.dump`.
