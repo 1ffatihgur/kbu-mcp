@@ -226,6 +226,36 @@ def extract_html(html: str, url: str) -> Extracted:
 
 # ---------------------------------------------------------------- PDF
 
+def _pdf_page_markdown(page, plain: str) -> str:
+    """Sayfadaki tabloları Markdown tablosuna çevirir; tablo dışındaki metin blokları yukarıdan aşağı sırayla kalır.
+    Çizgisiz sayfalarda tablo araması atlanır (find_tables pahalı)."""
+    import pymupdf
+
+    try:
+        if len(page.get_drawings()) < 8:
+            return plain
+        tables = page.find_tables(use_layout=False).tables  # yerleşim modeli (ONNX) bazı PDF'lerde çöküyor
+    except Exception:
+        return plain
+    tables = [t for t in tables if t.row_count >= 2 and t.col_count >= 2]
+    if not tables:
+        return plain
+    rects = [pymupdf.Rect(t.bbox) for t in tables]
+    parts = []
+    for b in page.get_text("blocks", sort=True):
+        r = pymupdf.Rect(b[:4])
+        if b[6] != 0 or any((r & t).get_area() > 0.5 * max(r.get_area(), 1) for t in rects):
+            continue
+        parts.append((r.y0, b[4]))
+    for t, r in zip(tables, rects):
+        try:
+            md = re.sub(r"\s*<br>\s*", " ", t.to_markdown(clean=False)).replace("**", "")
+        except Exception:
+            continue
+        parts.append((r.y0, "\n" + md.strip() + "\n"))
+    return clean_text("\n".join(x for _, x in sorted(parts, key=lambda p: p[0])))
+
+
 def extract_pdf(data: bytes) -> Extracted:
     import pymupdf
 
@@ -240,6 +270,8 @@ def extract_pdf(data: bytes) -> Extracted:
             total += len(txt)
             if len(txt) < 30 and page.get_images():
                 image_pages += 1
+            elif txt:
+                txt = _pdf_page_markdown(page, txt)
             if txt:
                 ex.sections.append((i, txt))
             for link in page.get_links():

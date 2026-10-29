@@ -9,6 +9,8 @@
   ağırlıkları) **+** pgvector anlamsal arama (OpenAI uyumlu embedding servisi, varsayılan `bge-m3`) →
   Reciprocal Rank Fusion, ardından tazelik (yeni tarihli belge önde). Embedding servisi yoksa anahtar kelimeyle sürer.
   Altın soru setinde (55 soru) recall@5: yalnızca anahtar kelime %93 → hibrit %96; toplantı kabul soruları 5/5.
+- Açık kaynak motor denemesi: Meilisearch aynı veri ve embedding'lerle %89 (`eval/compare_meilisearch.py`).
+- `docs/SUNUCU_KURULUM.md`: internetsiz üniversite sunucusuna adım adım kurulum (imaj/indeks taşıma, Ollama, nginx).
 - Sonuçlarda `kaynak` (`site` / `unis` / `medya` / `bologna`) ve `eslesme` (`anahtar`, `anlamsal`, ikisi) alanları;
   `search(kaynak=...)` filtresi.
 - **`academic_profile`** aracı: bir hocanın UNIS profili, idari görevleri, tüm yayın/proje/tez/ödülleri, rehber
@@ -20,6 +22,8 @@
 - **KBÜ Medya:** haber içeriği ve yayın tarihi doğru çıkarılıyor ("25 Şubat, 2025" biçimi); yalnızca son 2 yıl
   (`KBU_MEDYA_MAX_AGE_DAYS`).
 - Tüm çıktılar **Markdown** (başlık, liste, tablo). Şablon menü / üst bilgi / alt bilgi temizliği genişletildi.
+- PDF içindeki tablolar Markdown tablosuna çevrilir (çizgili tablolar; ör. kantin fiyat tarifesi).
+- OCR, ilk denemede metin çıkmayan sayfalarda 300 dpi ile ikinci kez dener; `kbu ocr --retry-failed`.
 - Büyük dosya sınırı 60 MB → 300 MB (`KBU_MAX_FILE_MB`), OCR sayfa tavanı (`KBU_MAX_OCR_PAGES`).
 - Çıkarıcı sürümü (`docs.parser`): çıkarıcı değişince belgeler koşullu GET'e takılmadan yeniden işlenir.
 - `kbu sample`: tam taramadan önce 5 site sayfası + 10 UNIS hocası + 10 KBÜ Medya haberiyle parse doğruluk raporu.

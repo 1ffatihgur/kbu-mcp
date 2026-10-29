@@ -92,7 +92,7 @@ def cmd_ocr(args) -> None:
     with _locked():
         conn = db.connect()
         db.init(conn)
-        print(json.dumps(run_ocr(conn, limit=args.limit, heartbeat=heartbeat), ensure_ascii=False))
+        print(json.dumps(run_ocr(conn, limit=args.limit, heartbeat=heartbeat, retry_failed=args.retry_failed), ensure_ascii=False))
 
 
 def cmd_unis(args) -> None:
@@ -272,6 +272,7 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("ocr", help="Taranmış PDF'leri OCR ile metne çevir (Tesseract gerekir)")
     p.add_argument("--limit", type=int)
+    p.add_argument("--retry-failed", action="store_true", help="Daha önce okunamamış belgeleri de yeniden dene")
     p.set_defaults(func=cmd_ocr)
 
     p = sub.add_parser("unis", help="UNIS akademisyen profillerini (yayın, proje, tez, idari görev) indeksle")

@@ -19,6 +19,8 @@ x-app: &app
     KBU_DATA_DIR: /data
   volumes:
     - appdata:/data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # aynı sunucudaki embedding servisine (Ollama) erişim (Linux)
   depends_on:
     db:
       condition: service_healthy

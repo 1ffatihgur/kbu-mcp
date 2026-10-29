@@ -29,7 +29,7 @@ Asistan:   SKS'nin "Yemekhane Fiyat Listesi"ne (25.06.2026) göre personel öğl
 | | |
 |---|---|
 | **Hibrit arama** | Anahtar kelime (PostgreSQL tam metin, Türkçe kök/ek işleme, BM25F) **+** anlamsal arama (pgvector, `bge-m3` embedding) → Reciprocal Rank Fusion. Sonuçlar ilgililiğe ve **tarihe** göre sıralanır (yeni belge önde). |
-| **Temiz veri** | Her şey **Markdown**'a çevrilir (başlık, liste, tablo); site şablonlarının menü / üst bilgi / alt bilgi kısımları atılır. Taranmış PDF'ler **OCR** ile önceden metne çevrilir; sorgu anında beklenmez. |
+| **Temiz veri** | Her şey **Markdown**'a çevrilir (başlık, liste, tablo — PDF içindeki tablolar dahil); site şablonlarının menü / üst bilgi / alt bilgi kısımları atılır. Taranmış PDF'ler **OCR** ile önceden metne çevrilir; sorgu anında beklenmez. |
 | **Kaynaklar** | Birim siteleri ve dosyaları · **UNIS** (her akademisyen için profil + idari görevler + tüm yayın, proje, tez, ödül) · **KBÜ Medya** (son 2 yıl) · OBS Bologna (ders planı, AKTS) · canlı telefon rehberi, yemek listesi, akademik takvim. Her sonuç `kaynak` etiketiyle gelir; filtrelenebilir. |
 | **Kişi grafiği** | `academic_profile`: bir hocanın UNIS profili, rehber kaydı ve adının geçtiği en yeni site/medya belgeleri tek çağrıda. |
 | **Üretim altyapısı** | PostgreSQL + pgvector, Docker Compose, kalıcı **iş kuyruğu** (kesilirse kaldığı yerden), saatlik istek sınırı, hata logları, **API anahtarıyla kimlik doğrulama**. |
@@ -50,7 +50,14 @@ Asistan:   SKS'nin "Yemekhane Fiyat Listesi"ne (25.06.2026) göre personel öğl
 
 ---
 
+## 📊 Arama kalitesi
+
+55 soruluk altın sette (`eval/questions.json`) ilk 5 sonuçta doğru belge: **hibrit %96**, yalnızca anahtar kelime
+%93. Açık kaynak Meilisearch aynı veri ve aynı embedding'lerle %89 (`eval/compare_meilisearch.py`).
+
 ## 🚀 Sunucu Kurulumu (üretim, Docker)
+
+Adım adım ve internetsiz sunucu için: **[docs/SUNUCU_KURULUM.md](docs/SUNUCU_KURULUM.md)**.
 
 Gerekenler: Docker + Docker Compose, bir embedding servisi (OpenAI uyumlu `/v1/embeddings`; ör. Ollama'da
 `ollama pull bge-m3`, ya da kurumun LLM sunucusunun embedding uç noktası).

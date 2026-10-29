@@ -11,3 +11,4 @@ data/
 # Uçtan uca test çıktıları gerçek rehber kayıtlarını içerir
 eval/e2e_out.md
 .env
+teslim/

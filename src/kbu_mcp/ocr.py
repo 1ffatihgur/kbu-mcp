@@ -76,7 +76,7 @@ def find_tessdata(auto_download: bool = False) -> str | None:
         return None
 
 
-def ocr_pdf(data: bytes, tessdata: str, max_pages: int = 200) -> Extracted:
+def ocr_pdf(data: bytes, tessdata: str, max_pages: int = config.MAX_OCR_PAGES) -> Extracted:
     import pymupdf
 
     ex = Extracted()
@@ -87,8 +87,11 @@ def ocr_pdf(data: bytes, tessdata: str, max_pages: int = 200) -> Extracted:
                 break
             txt = clean_text(page.get_text("text", sort=True))
             if len(txt) < 30:
-                tp = page.get_textpage_ocr(language="tur+eng", dpi=200, full=True, tessdata=tessdata)
-                txt = clean_text(page.get_text("text", textpage=tp, sort=True))
+                for dpi in (200, 300):  # soluk / küçük yazılı taramalarda yüksek çözünürlük ikinci deneme
+                    tp = page.get_textpage_ocr(language="tur+eng", dpi=dpi, full=True, tessdata=tessdata)
+                    txt = clean_text(page.get_text("text", textpage=tp, sort=True))
+                    if len(txt) >= 30:
+                        break
             if txt:
                 ex.sections.append((i, txt))
     ex.text = "\n\n".join(t for _, t in ex.sections)
@@ -113,7 +116,7 @@ def _ocr_worker(args):
         return doc_id, f"{type(e).__name__}: {e}"[:200]
 
 
-def run_ocr(conn, limit: int | None = None, workers: int | None = None, heartbeat=None) -> dict:
+def run_ocr(conn, limit: int | None = None, workers: int | None = None, heartbeat=None, retry_failed: bool = False) -> dict:
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     tessdata = find_tessdata(auto_download=True)
@@ -121,7 +124,7 @@ def run_ocr(conn, limit: int | None = None, workers: int | None = None, heartbea
         raise SystemExit("Tesseract bulunamadı. Kurulum: Windows `winget install UB-Mannheim.TesseractOCR`, "
                          "macOS `brew install tesseract`, Linux `sudo apt install tesseract-ocr`")
     rows = {r["id"]: r for r in conn.execute(
-        "SELECT * FROM docs WHERE status='ok' AND needs_ocr=1 AND kind='pdf' ORDER BY id" + (f" LIMIT {int(limit)}" if limit else "")
+        "SELECT * FROM docs WHERE status IN ('ok', 'recheck') AND needs_ocr IN (" + ("1,3" if retry_failed else "1") + ") AND kind='pdf' ORDER BY id" + (f" LIMIT {int(limit)}" if limit else "")
     ).fetchall()}
     stats = {"toplam": len(rows), "basarili": 0, "hata": 0}
     if not rows:
