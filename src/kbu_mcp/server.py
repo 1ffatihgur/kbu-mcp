@@ -298,7 +298,7 @@ async def list_units(
     sites = []
     try:
         for r in conn().execute(
-            """SELECT url, site_title FROM docs WHERE status='ok' AND kind='html' AND site_title IS NOT NULL
+            """SELECT url, site_title FROM docs WHERE status IN ('ok', 'recheck') AND kind='html' AND site_title IS NOT NULL
                AND (url LIKE '%.karabuk.edu.tr/' OR url LIKE '%/index.aspx' OR url ~ '^https://[^/]+\.karabuk\.edu\.tr/[a-z]' )
                ORDER BY url"""):
             path = urls.urlsplit(r["url"]).path
@@ -491,11 +491,11 @@ def index_status() -> dict:
         return {**out, **NO_INDEX}
     from .embed import status as embed_status
     out.update({
-        "kaynaklar": {r[0]: r[1] for r in c.execute("SELECT source, COUNT(*) FROM docs WHERE status='ok' GROUP BY source")},
+        "kaynaklar": {r[0]: r[1] for r in c.execute("SELECT source, COUNT(*) FROM docs WHERE status IN ('ok', 'recheck') GROUP BY source")},
         "anlamsal_arama": embed_status(c),
-        "belgeler": {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM docs WHERE status='ok' GROUP BY kind")},
+        "belgeler": {r[0]: r[1] for r in c.execute("SELECT kind, COUNT(*) FROM docs WHERE status IN ('ok', 'recheck') GROUP BY kind")},
         "parca_sayisi": c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
-        "site_sayisi": c.execute("SELECT COUNT(DISTINCT host) FROM docs WHERE status='ok'").fetchone()[0],
+        "site_sayisi": c.execute("SELECT COUNT(DISTINCT host) FROM docs WHERE status IN ('ok', 'recheck')").fetchone()[0],
         "ocr_ile_okunan_pdf": c.execute("SELECT COUNT(*) FROM docs WHERE needs_ocr=2").fetchone()[0],
         "rehber_onbellek": db.get_meta(c, "people_refreshed"),
     })

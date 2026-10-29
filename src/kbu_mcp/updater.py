@@ -72,7 +72,7 @@ def needed_mode() -> str | None:
     """'full', 'hot' veya None (güncel)."""
     try:
         conn = db.connect(readonly=True)
-        ok = conn.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0]
+        ok = conn.execute("SELECT COUNT(*) FROM docs WHERE status IN ('ok', 'recheck')").fetchone()[0]
         last_full = db.get_meta(conn, "last_update_full") or db.get_meta(conn, "last_crawl_finished")
         last_hot = db.get_meta(conn, "last_update_hot")
         queued = conn.execute("SELECT COUNT(*) FROM docs WHERE status IN ('queued','recheck')").fetchone()[0]
@@ -106,7 +106,7 @@ def _update(conn, hot: bool) -> dict:
     from .people import refresh_people
 
     db.init(conn)
-    fresh = conn.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0] < 100
+    fresh = conn.execute("SELECT COUNT(*) FROM docs WHERE status IN ('ok', 'recheck')").fetchone()[0] < 100
     summary: dict = {"mod": "ilk tarama" if fresh else ("saatlik" if hot else "tam yenileme")}
     if fresh:
         summary["tarama"] = asyncio.run(crawl(conn, heartbeat=heartbeat))

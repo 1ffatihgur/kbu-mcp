@@ -210,7 +210,7 @@ def _status_dict() -> dict:
     try:
         from . import db
         c = db.connect(readonly=True)
-        st["belge_sayisi"] = c.execute("SELECT COUNT(*) FROM docs WHERE status='ok'").fetchone()[0]
+        st["belge_sayisi"] = c.execute("SELECT COUNT(*) FROM docs WHERE status IN ('ok', 'recheck')").fetchone()[0]
         c.close()
     except Exception:
         pass

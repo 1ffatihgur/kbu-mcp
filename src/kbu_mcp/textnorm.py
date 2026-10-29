@@ -106,6 +106,9 @@ def _term(word: str, prefix: bool = True) -> str | None:
     return f'"{s}"'
 
 
+_SYN_FOLDED: dict[str, list[str]] = {}
+
+
 def query_terms(query: str) -> list[list[str]]:
     """Her anlamlı kelime için (asıl terim + eş anlamlılar) grubu döner."""
     groups: list[list[str]] = []
@@ -116,7 +119,9 @@ def query_terms(query: str) -> list[list[str]]:
         t = _term(w)
         if t:
             group.append(t)
-        for syn in SYNONYMS.get(w, []):
+        if not _SYN_FOLDED:
+            _SYN_FOLDED.update({fold(k): v for k, v in SYNONYMS.items()})
+        for syn in SYNONYMS.get(w) or _SYN_FOLDED.get(fold(w), []):  # "ucretleri" de "ücretleri" gibi
             for sw in words(syn):
                 st = _term(sw)
                 if st and st not in group:
