@@ -157,7 +157,7 @@ def cmd_errors(args) -> None:
         where += " AND host = ?"
         params.append(args.host)
     rows = conn.execute(
-        f"""SELECT host, split_part(COALESCE(error, '?'), ':', 1) AS neden, COUNT(*) AS n, MIN(url) AS ornek
+        f"""SELECT host, split_part(COALESCE(error, '-'), ':', 1) AS neden, COUNT(*) AS n, MIN(url) AS ornek
             FROM docs WHERE {where} GROUP BY 1, 2 ORDER BY 3 DESC LIMIT ?""", (*params, args.limit)).fetchall()
     for r in rows:
         print(f"{r['n']:>6}  {r['host']:<35} {r['neden'][:45]:<45} örn: {r['ornek']}")
