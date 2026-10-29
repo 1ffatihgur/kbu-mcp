@@ -13,6 +13,14 @@ $logDir = Join-Path $root "data"; New-Item -ItemType Directory -Force $logDir | 
 $srvLog = Join-Path $logDir "remote_server.log"; $cfLog = Join-Path $logDir "tunnel.log"
 $urlFile = Join-Path $logDir "remote_url.txt"
 
+# .env'deki ilk API anahtarı (sunucu aynı dosyayı okur): adres bu anahtarla birlikte yazdırılır
+$apiKey = $null
+$envFile = Join-Path $root ".env"
+if (Test-Path $envFile) {
+    $line = Get-Content $envFile | Where-Object { $_ -match '^\s*KBU_API_KEYS\s*=\s*\S' } | Select-Object -First 1
+    if ($line) { $apiKey = (($line -split '=', 2)[1] -split ',')[0].Trim() }
+}
+
 # MCP sunucusu: depo kopyasında .venv, değilse uvx ile GitHub'dan
 $venvPy = Join-Path $root ".venv\Scripts\python.exe"
 if (Test-Path $venvPy) {
@@ -47,12 +55,19 @@ function Start-Tunnel {
     for ($i = 0; $i -lt 30; $i++) {
         try { Invoke-WebRequest "$u/health" -UseBasicParsing -TimeoutSec 5 | Out-Null; break } catch { Start-Sleep 2 }
     }
-    "$u/mcp" | Set-Content -Encoding UTF8 $urlFile
+    $mcpUrl = if ($apiKey) { "$u/mcp?key=$apiKey" } else { "$u/mcp" }
+    $mcpUrl | Set-Content -Encoding UTF8 $urlFile
     Write-Host ""
-    Write-Host ("[{0:HH:mm}] Remote MCP adresi:  $u/mcp" -f (Get-Date)) -ForegroundColor Green
+    Write-Host ("[{0:HH:mm}] Remote MCP adresi:  $mcpUrl" -f (Get-Date)) -ForegroundColor Green
     Write-Host "         Tanıtım sayfası:    $u/"
-    Write-Host "         Claude Desktop / claude.ai: Settings > Connectors > Add custom connector > URL: $u/mcp"
-    Write-Host "         Claude Code: claude mcp add --transport http karabuk-universitesi $u/mcp"
+    Write-Host "         Claude Desktop / claude.ai: Settings > Connectors > Add custom connector > URL: $mcpUrl"
+    if ($apiKey) {
+        Write-Host "         Claude Code: claude mcp add --transport http karabuk-universitesi $u/mcp --header `"Authorization: Bearer $apiKey`""
+        Write-Host "         Kimlik doğrulama AÇIK: anahtarsız bağlantılar reddedilir." -ForegroundColor Green
+    } else {
+        Write-Host "         Claude Code: claude mcp add --transport http karabuk-universitesi $u/mcp"
+        Write-Host "         UYARI: Kimlik doğrulama KAPALI (.env'de KBU_API_KEYS yok); adresi bilen herkes bağlanabilir." -ForegroundColor Yellow
+    }
     return @{ Proc = $p; Url = $u }
 }
 
