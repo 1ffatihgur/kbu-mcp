@@ -115,3 +115,12 @@ def test_unis_cell_text_joins_authors_and_counts():
     from kbu_mcp.unis import _cell_text
 
     assert _cell_text("<b>A</b>, <i>B</i><span>2026</span><span>282</span><span>Yayın</span>") == ["A, B", "2026", "282 Yayın"]
+
+
+def test_header_contact_kept_when_header_removed():
+    html = """<html><head><title>Bölüm</title></head><body><header id="masthead" class="site-header">
+      <div id="quick-contact"><ul><li><a href="tel:">0 370 418 93 51</a></li><li><a href="mailto:">bilgisayar@karabuk.edu.tr</a></li></ul></div>
+      <nav>Menü</nav></header><div id="txtIcerik"><h2>İdari Personel</h2><p>Bölüm Sekreteri Ad SOYAD 9351</p></div></body></html>"""
+    ex = extract_html(html, "https://bbf.karabuk.edu.tr/idariPersonel.aspx?BA=bilgisayar")
+    assert ex.text.startswith("Birim iletişim:") and "418 93 51" in ex.text and "bilgisayar@" in ex.text
+    assert "Menü" not in ex.text and ex.title == "İdari Personel"

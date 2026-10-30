@@ -177,6 +177,22 @@ def extract_html(html: str, url: str) -> Extracted:
                 footer_contact = txt
                 break
 
+    # Üst bilgideki birim adı + telefon / e-posta (bölüm sitelerinde bölüm numarası yalnızca burada yazar).
+    # Üst bilgi menüyle birlikte atıldığı için önce bu satır ayrılır.
+    header_contact = ""
+    qc = tree.css_first("#quick-contact, .quick-contact, .header-contact")
+    if qc:
+        parts, seen = [], set()
+        for n in qc.css("a"):
+            p = re.sub(r"\s+", " ", n.text(separator=" ")).strip()
+            if re.search(r"\d{3}.*\d{2}|@", p) and p not in seen:
+                seen.add(p)
+                parts.append(p)
+        brand = tree.css_first("#masthead .site-title, .site-branding, #site-title, .logo-text")
+        name = clean_text(brand.text(separator=" ")) if brand else ""
+        if parts:
+            header_contact = "Birim iletişim: " + " · ".join(([name] if name and len(name) < 120 else []) + parts)
+
     body = tree.body
     if body is None:
         return ex
@@ -219,6 +235,8 @@ def extract_html(html: str, url: str) -> Extracted:
         first = ex.text.split("\n", 1)[0].strip().lstrip("#").strip()
         # Ana sayfaların ilk satırı genelde bir bölüm başlığıdır ("Duyurular", slayt metni): site adı daha doğru
         ex.title = (ex.site_title if is_home and ex.site_title else first[:150]) or ex.site_title
+    if header_contact:
+        ex.text = header_contact + "\n\n" + ex.text
     ex.sections = [(None, ex.text)]
     ex.content_date = page_date or find_date(ex.text)
     return ex
