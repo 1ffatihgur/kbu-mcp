@@ -128,7 +128,7 @@ def search(
     file_type: Annotated[str | None, Field(description="'sayfa', 'pdf', 'word', 'excel', 'sunum' veya 'dosya' (tüm dosyalar)")] = None,
     since: Annotated[str | None, Field(description="Bu tarihten (YYYY-AA-GG) yeni belgeler")] = None,
     kaynak: Annotated[str | None, Field(description="Kaynak filtresi: 'site' (birim siteleri ve dosyaları), 'unis' (akademisyen profilleri, yayınlar, projeler, tezler), 'medya' (KBÜ Medya haberleri, son 2 yıl), 'bologna' (ders planları/AKTS). Boş: hepsi")] = None,
-    limit: Annotated[int, Field(ge=1, le=25)] = 8,
+    limit: Annotated[int, Field(ge=1, le=25)] = config.SEARCH_LIMIT,
 ) -> dict:
     """Karabük Üniversitesi (KBÜ) hakkındaki HER soruda — kullanıcı "MCP kullan" demese bile — ilk başvurulacak araç.
     Tüm KBÜ siteleri, PDF/Word/Excel dosyaları (taranmış belgeler OCR ile), UNIS akademisyen profilleri ve KBÜ Medya
@@ -138,7 +138,12 @@ def search(
         c = conn()
     except RuntimeError as e:
         return {**NO_INDEX, "hata": str(e)}
-    res = fts_search(c, query, unit=unit, kind=file_type, date_from=since, limit=limit, source=kaynak)
+    res = fts_search(c, query, unit=unit, kind=file_type, date_from=since, limit=limit, source=kaynak,
+                     chunks_per_doc=config.SEARCH_CHUNKS_PER_DOC)
+    for r in res:  # bağlamı küçük modeller için: parça önizlemesi kısaltılır, tamamı read_document ile okunur
+        for p in r["parcalar"]:
+            if len(p["metin"]) > config.SNIPPET_CHARS:
+                p["metin"] = p["metin"][: config.SNIPPET_CHARS] + " …"
     out = {"sorgu": query, "sonuc_sayisi": len(res), "sonuclar": res}
     if updater.lock_active() and not db.get_meta(c, "last_update_full") and not db.get_meta(c, "last_crawl_finished"):
         out["uyari"] = "İlk indeksleme sürüyor; sonuçlar eksik olabilir. Bulunamayan bilgi için fetch_page ile ilgili birim sitesine bakın."
@@ -158,7 +163,7 @@ def search(
 async def read_document(
     url: Annotated[str, Field(description="search sonucundaki veya herhangi bir *.karabuk.edu.tr URL'si")],
     offset: Annotated[int, Field(ge=0, description="Uzun belgelerde devam etmek için karakter konumu")] = 0,
-    max_chars: Annotated[int, Field(ge=1000, le=60000)] = 20000,
+    max_chars: Annotated[int, Field(ge=1000, le=60000, description="Döndürülecek en fazla karakter; devamı için offset")] = config.DOC_CHARS,
     force_live: Annotated[bool, Field(description="İndeks yerine her zaman canlı siteden oku")] = False,
 ) -> dict:
     """Bir sayfanın veya dosyanın (PDF/Word/Excel...) tam metnini döner. İndeksteki kopya 24 saatten eskiyse
@@ -433,7 +438,7 @@ async def fetch_page(
 @mcp.tool(annotations=RO)
 def academic_profile(
     ad: Annotated[str, Field(description="Akademisyenin adı soyadı (unvansız da olur), ör. 'Hakan Kutucu', 'İsa Avcı'")],
-    max_chars: Annotated[int, Field(ge=2000, le=60000)] = 20000,
+    max_chars: Annotated[int, Field(ge=2000, le=60000)] = config.DOC_CHARS,
 ) -> dict:
     """Bir akademisyen / hoca hakkında her şey tek çağrıda: UNIS profili (unvan, birim, idari görevler, araştırma
     alanları, atıf özetleri, TÜM yayınlar, projeler, tez danışmanlıkları, ödüller), telefon rehberi kaydı ve

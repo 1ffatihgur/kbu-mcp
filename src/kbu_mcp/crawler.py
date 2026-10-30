@@ -374,6 +374,17 @@ class Crawler:
                       parser=config.PARSER_VERSION, checked_at=now_iso())
             return
 
+        # OCR ile okunmuş taranmış belge: yeniden indirmede düz metin çıkmaz; OCR metni silinmesin.
+        # Dosya değiştiyse (Last-Modified farklı) parçalar kalır ama yeniden OCR kuyruğuna alınır.
+        if doc.get("needs_ocr") == 2 and ex.needs_ocr and len(ex.text.strip()) < 200:
+            lm_new = resp.headers.get("last-modified")
+            changed = bool(lm_new and doc.get("last_modified") and lm_new != doc.get("last_modified"))
+            self._set(doc["id"], status="ok", final_url=final_url, http_status=status, etag=resp.headers.get("etag"),
+                      last_modified=lm_new, needs_ocr=1 if changed else 2, parser=config.PARSER_VERSION,
+                      fail_count=0, error=None, checked_at=now_iso())
+            self.stats["ocr_kept"] += 1
+            return
+
         h = content_hash(ex.text) if ex.text else None
         etag = resp.headers.get("etag")
         lm = resp.headers.get("last-modified")

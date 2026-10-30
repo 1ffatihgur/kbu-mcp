@@ -58,6 +58,13 @@ EMBED_DIM = _env_int("KBU_EMBED_DIM", 1024)
 EMBED_BATCH = _env_int("KBU_EMBED_BATCH", 64)
 EMBED_PARALLEL = _env_int("KBU_EMBED_PARALLEL", 2)
 
+# Araç cevap boyutları: bağlamı küçük modellerde (ör. 16-32k token) taşmayı önler. Model gerekirse parametreyle
+# daha fazlasını ister (read_document offset / max_chars).
+SEARCH_LIMIT = _env_int("KBU_SEARCH_LIMIT", 5)
+SEARCH_CHUNKS_PER_DOC = _env_int("KBU_SEARCH_CHUNKS_PER_DOC", 1)
+SNIPPET_CHARS = _env_int("KBU_SNIPPET_CHARS", 700)
+DOC_CHARS = _env_int("KBU_DOC_CHARS", 8000)
+
 # Uzak MCP erişim anahtarları (boşsa kimlik doğrulama kapalı)
 API_KEYS = {k.strip() for k in (os.environ.get("KBU_API_KEYS") or "").split(",") if k.strip()}
 

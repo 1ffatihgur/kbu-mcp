@@ -146,6 +146,7 @@ kullanmasını sağlar ("MCP kullan" demeye gerek yoktur).
 | `KBU_CRAWL_MAX_PER_HOUR` | `0` (sınırsız) | Tüm sitelere toplam saatlik istek sınırı (ör. 1000) |
 | `KBU_MEDYA_MAX_AGE_DAYS` | `730` | KBÜ Medya'da geriye dönük gün sınırı |
 | `KBU_MAX_FILE_MB` / `KBU_MAX_OCR_PAGES` | `300` / `300` | Büyük dosya sınırı / OCR sayfa tavanı |
+| `KBU_SEARCH_LIMIT` / `KBU_SNIPPET_CHARS` / `KBU_DOC_CHARS` | `5` / `700` / `8000` | Araç cevap boyutu (bağlamı küçük modellerde taşmasın; model gerekirse daha fazlasını ister) |
 | `KBU_RATE_LIMIT_PER_MIN` | `120` | Uzak MCP'de IP başına dakikalık istek |
 | `KBU_QUERY_LOG` | `1` | `0`: uzak araç çağrılarını `data/queries.jsonl`'e yazma (veritabanında tutulmaz) |
 
